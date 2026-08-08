@@ -12,8 +12,6 @@ set_warnings("allextra")
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
-add_defines("COMMONLIB_RUNTIMECOUNT=3")
-
 -- define targets
 target("PowerArmorPipBoyUI")
     add_rules("commonlibf4.plugin", {

@@ -14,7 +14,6 @@
 
 # Claude Code (machine-local settings; shared settings.json may be committed)
 /.claude/settings.local.json
-/.claude/
 
 # OS cruft
 Thumbs.db
