@@ -56,6 +56,7 @@ bForcePowerArmorPipboy=1
 bPowerArmorAudio=1
 bKeepPipboyLightOn=1
 bUsePipboyEffectColor=0
+bEnableDebugLogging=0
 ```
 
 Settings are reloaded whenever the Pip-Boy opens and before a forced close, so
@@ -72,16 +73,39 @@ control whether Fallout 4 renders the Pip-Boy scanline/effect pass at all.
 Set `bForcePowerArmorPipboy` to `0` to restore the normal wrist-mounted Pip-Boy
 presentation on the next open.
 
+Set `bEnableDebugLogging` to `1` to record verbose menu-transition, geometry,
+camera, holotape, color, and live-settings diagnostics. Errors, warnings, and
+the startup hook-install summary are always logged. The default is `0` for a
+quieter release log; enable it before reproducing an issue when additional
+diagnostic detail is useful.
+
 ## Open paths
 
 Both the Tab/Pip-Boy input handler and the Pip-Boy companion app's use-item
-command are redirected to the instant no-animation open. Terminal interaction
-is deliberately left alone because `TerminalMenu` is a separate presentation.
+command are redirected to the instant no-animation open. Interacting with a
+world terminal is deliberately left alone; only a `TerminalMenu` launched by a
+holotape inside an active forced Pip-Boy receives the PA presentation decisions.
 
-While a forced menu is open, its native input handler recognizes the Pip-Boy
-toggle and queues the standard `PipboyMenu` hide message. This preserves the
-vanilla menu teardown while avoiding any dependency on the wrist animation
-graph for closing.
+While a forced menu is open, the plugin admits the Pip-Boy toggle at the stable
+top level and completes the PA close event synchronously. This avoids waiting
+for an event that the non-PA animation graph cannot produce. Item inspection,
+modal prompts, holotape games, and terminal-form holotapes retain ownership of
+Cancel/Tab until their native unwind has finished, so the parent Pip-Boy is not
+closed beneath a nested input layer.
+
+Holotape loads use the engine's native no-animation path during a forced
+presentation. Pip-Boy games continue through `PipboyHolotapeMenu`; terminal-form
+holotapes continue through `TerminalMenu`, with its PA render-target dimensions
+and hit-test projection selected so framing and mouse input match the fullscreen
+quad. Genuine power armor keeps its vanilla holotape behavior.
+
+All final-close paths converge on the engine's `ClosedownPipboy` routine. The
+plugin resets its forced state and detaches the standalone screen only after
+that routine restores menu, cursor, input, light, and deferred-action state.
+Load and new-game messages provide an additional defensive reset. Settings and
+filesystem failures are contained at the reload boundary rather than unwinding
+through an engine hook; the previous/default settings remain available and the
+failure is logged.
 
 ## Building
 

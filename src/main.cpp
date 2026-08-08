@@ -112,9 +112,36 @@ namespace
 	bool g_powerArmorAudio = true;
 	bool g_keepPipboyLightOn = true;
 	bool g_usePipboyEffectColor = false;
+	bool g_enableDebugLogging = false;
 	bool g_savedPowerArmorEffectColor = false;
 	bool g_loggedMissingEffectColorSetting = false;
 	std::array<float, 3> g_originalPowerArmorEffectColor{};
+
+	template <class... Args>
+	void DiagnosticLog(const std::format_string<Args...> a_format, Args&&... a_args) noexcept
+	{
+		if (!g_enableDebugLogging) {
+			return;
+		}
+
+		// Diagnostics must never become a new exception path through an engine hook.
+		try {
+			REX::Impl::Log(
+				std::source_location::current(),
+				REX::ELogLevel::Info,
+				a_format,
+				std::forward<Args>(a_args)...);
+		} catch (...) {
+		}
+	}
+
+	void LogSettingsException(const char* a_message) noexcept
+	{
+		try {
+			REX::ERROR("Could not reload PowerArmorPipBoyUI.ini: {}", a_message);
+		} catch (...) {
+		}
+	}
 
 	bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
 	{
@@ -202,7 +229,7 @@ namespace
 				for (std::size_t i = 0; i < powerArmorSettings.size(); ++i) {
 					powerArmorSettings[i]->SetFloat(g_originalPowerArmorEffectColor[i]);
 				}
-				REX::INFO(
+				DiagnosticLog(
 					"Restored Power Armor Pip-Boy effect color: R={:.4f} G={:.4f} B={:.4f}",
 					g_originalPowerArmorEffectColor[0],
 					g_originalPowerArmorEffectColor[1],
@@ -240,7 +267,7 @@ namespace
 			powerArmorSettings[i]->SetFloat(pipboyColor[i]);
 		}
 		if (changed) {
-			REX::INFO(
+			DiagnosticLog(
 				"Applied Fallout4Prefs.ini Pip-Boy effect color to the Power Armor Pip-Boy: R={:.4f} G={:.4f} B={:.4f}",
 				pipboyColor[0],
 				pipboyColor[1],
@@ -249,37 +276,54 @@ namespace
 		g_loggedMissingEffectColorSetting = false;
 	}
 
-	void LoadSettings()
+	void LoadSettingsImpl()
 	{
 		const auto iniPath = GetIniPath();
 		const bool forcePowerArmorPipboy = GetSetting(iniPath, L"bForcePowerArmorPipboy", true);
 		const bool powerArmorAudio = GetSetting(iniPath, L"bPowerArmorAudio", true);
 		const bool keepPipboyLightOn = GetSetting(iniPath, L"bKeepPipboyLightOn", true);
 		const bool usePipboyEffectColor = GetSetting(iniPath, L"bUsePipboyEffectColor", false);
+		const bool enableDebugLogging = GetSetting(iniPath, L"bEnableDebugLogging", false);
 
 		static bool firstLoad = true;
 		const bool changed =
 			forcePowerArmorPipboy != g_forcePowerArmorPipboy ||
 			powerArmorAudio != g_powerArmorAudio ||
 			keepPipboyLightOn != g_keepPipboyLightOn ||
-			usePipboyEffectColor != g_usePipboyEffectColor;
+			usePipboyEffectColor != g_usePipboyEffectColor ||
+			enableDebugLogging != g_enableDebugLogging;
 
 		g_forcePowerArmorPipboy = forcePowerArmorPipboy;
 		g_powerArmorAudio = powerArmorAudio;
 		g_keepPipboyLightOn = keepPipboyLightOn;
 		g_usePipboyEffectColor = usePipboyEffectColor;
+		g_enableDebugLogging = enableDebugLogging;
 		ApplyPipboyEffectColor();
 
-		if (firstLoad || changed) {
-			REX::INFO(
-				"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bUsePipboyEffectColor={} ({})",
+		if (g_enableDebugLogging && (firstLoad || changed)) {
+			DiagnosticLog(
+				"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bUsePipboyEffectColor={} bEnableDebugLogging={} ({})",
 				g_forcePowerArmorPipboy,
 				g_powerArmorAudio,
 				g_keepPipboyLightOn,
 				g_usePipboyEffectColor,
+				g_enableDebugLogging,
 				iniPath.string());
 		}
 		firstLoad = false;
+	}
+
+	void LoadSettings() noexcept
+	{
+		// This boundary is shared by plugin startup and the open/close trampoline
+		// callbacks. Filesystem/path allocation failures must not unwind into Fallout 4.
+		try {
+			LoadSettingsImpl();
+		} catch (const std::exception& exception) {
+			LogSettingsException(exception.what());
+		} catch (...) {
+			LogSettingsException("unknown exception");
+		}
 	}
 
 	// The PA presentation needs only this screen quad. PowerArmorGeometry normally loads
@@ -326,7 +370,7 @@ namespace
 		// unhide it during open; the first open is reculled for one setup frame below.
 		g_powerArmorPipboyScreen->SetAppCulled(true);
 
-		REX::INFO("Loaded PADashPipboyScreen.nif without the Power Armor dashboard");
+		DiagnosticLog("Loaded PADashPipboyScreen.nif without the Power Armor dashboard");
 		return true;
 	}
 
@@ -347,7 +391,7 @@ namespace
 		}
 
 		geometry->pipboyPAGlass = g_powerArmorPipboyScreen;
-		REX::INFO("Attached the standalone screen to PowerArmorGeometry::pipboyPAGlass");
+		DiagnosticLog("Attached the standalone screen to PowerArmorGeometry::pipboyPAGlass");
 		return true;
 	}
 
@@ -358,7 +402,7 @@ namespace
 			geometry->pipboyPAGlass.get() == g_powerArmorPipboyScreen.get()) {
 			g_powerArmorPipboyScreen->SetAppCulled(true);
 			geometry->pipboyPAGlass.reset();
-			REX::INFO("Detached the standalone screen after the forced Pip-Boy session");
+			DiagnosticLog("Detached the standalone screen after the forced Pip-Boy session");
 		}
 	}
 
@@ -368,7 +412,7 @@ namespace
 		g_loggedFirstPersonFreeze.store(false, std::memory_order_relaxed);
 		DetachStandalonePowerArmorPipboyGeometry();
 		if (wasForced) {
-			REX::INFO("Reset forced Pip-Boy presentation ({})", a_reason);
+			DiagnosticLog("Reset forced Pip-Boy presentation ({})", a_reason);
 		}
 	}
 
@@ -408,7 +452,7 @@ namespace
 				if (g_forceThisOpen.load(std::memory_order_relaxed) && manager &&
 					manager->QPipboyActive() && g_powerArmorPipboyScreen) {
 					RevealPowerArmorPipboyScreen();
-					REX::INFO("Revealed the warmed Pip-Boy screen after its setup frame");
+					DiagnosticLog("Revealed the warmed Pip-Boy screen after its setup frame");
 				}
 			});
 		} else {
@@ -528,7 +572,7 @@ namespace
 		// OnPipboyCloseAnim normally reaches the authoritative closedown hook. Keep
 		// this idempotent reset as a final guard if the engine returned early.
 		ResetForcedPresentation("synthetic close completion"sv);
-		REX::INFO(
+		DiagnosticLog(
 			"Completed synthetic PA close: active={} opening={} closing={} pendingItem={} pendingFastTravel={}",
 			a_manager->QPipboyActive(),
 			a_manager->pipboyOpening,
@@ -555,7 +599,7 @@ namespace
 		const bool forceNoAnimation =
 			g_forceThisOpen.load(std::memory_order_relaxed) && !a_noAnim;
 		if (forceNoAnimation) {
-			REX::INFO("Using the native no-animation path for a forced holotape load");
+			DiagnosticLog("Using the native no-animation path for a forced holotape load");
 		}
 
 		a_manager->PlayPipboyLoadHolotapeAnim(a_holotape, a_noAnim || forceNoAnimation);
@@ -567,7 +611,7 @@ namespace
 	{
 		if (IsForcedPipboyToggleEvent(a_event) && !IsForcedPipboyCloseEvent(a_event)) {
 			if (const auto* manager = RE::PipboyManager::GetSingleton()) {
-				REX::INFO(
+				DiagnosticLog(
 					"Passing Pip-Boy toggle to nested presentation: examine={} raising={} loweringReason={}",
 					manager->pipboyExamineMode,
 					manager->pipboyRaising,
@@ -580,7 +624,7 @@ namespace
 		if (IsForcedPipboyCloseEvent(a_event)) {
 			if (auto* manager = RE::PipboyManager::GetSingleton()) {
 				const bool activeBefore = manager->QPipboyActive();
-				REX::INFO(
+				DiagnosticLog(
 					"Forced close input: event='{}' code=0x{:X} active={} opening={} closing={} loweringReason={}",
 					a_event->QUserEvent().c_str(),
 					static_cast<std::uint32_t>(a_event->GetBSButtonCode()),
@@ -614,7 +658,7 @@ namespace
 			// only this state for our screen-only presentation instead of entering a
 			// Pip-Boy camera mode, which changes the camera stack and return view.
 			if (!g_loggedFirstPersonFreeze.exchange(true, std::memory_order_relaxed)) {
-				REX::INFO("Froze first-person camera updates for the forced Pip-Boy session");
+				DiagnosticLog("Froze first-person camera updates for the forced Pip-Boy session");
 			}
 			return;
 		}
@@ -668,7 +712,7 @@ namespace
 			SetPipboyActive(a_manager, true);
 			REX::WARN("Generic open omitted Pip-Boy active state; repaired it");
 		}
-		REX::INFO("Forced Pip-Boy open completed: active={}", a_manager->QPipboyActive());
+		DiagnosticLog("Forced Pip-Boy open completed: active={}", a_manager->QPipboyActive());
 	}
 
 	[[nodiscard]] std::uintptr_t GetCallTarget(const std::uintptr_t a_callAddress)
@@ -868,7 +912,7 @@ namespace
 			if (!a_message->data) {
 				ResetForcedPresentation("game data unloaded"sv);
 				g_powerArmorPipboyScreen.reset();
-				REX::INFO("Released the standalone Pip-Boy screen before game-data teardown");
+				DiagnosticLog("Released the standalone Pip-Boy screen before game-data teardown");
 				return;
 			}
 
