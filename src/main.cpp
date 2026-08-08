@@ -47,6 +47,11 @@ namespace
 		CallSite{ 1477369, 0x154, "Pip-Boy opened (item preview camera)"sv },
 		CallSite{ 1477369, 0x24C, "Pip-Boy opened (screen shader + TAA mode)"sv },
 		CallSite{ 1477369, 0x2A6, "Pip-Boy opened (cursor constraint)"sv },
+
+		// Terminal-form holotapes use TerminalMenu instead of PipboyHolotapeMenu.
+		// Its render target and mouse projection each make their own PA decision.
+		CallSite{ 188351, 0x3AC, "Terminal holotape render-target dimensions"sv },
+		CallSite{ 926335, 0x860, "Terminal holotape screen-space hit testing"sv },
 	};
 
 	constexpr std::array kOpenAudioSites{
@@ -455,6 +460,9 @@ namespace
 		}
 
 		if (ui->GetMenuOpen<RE::PipboyHolotapeMenu>()) {
+			return true;
+		}
+		if (ui->GetMenuOpen<RE::TerminalMenu>()) {
 			return true;
 		}
 
