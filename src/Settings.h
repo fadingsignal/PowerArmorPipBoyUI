@@ -1,0 +1,11 @@
+#pragma once
+
+namespace PowerArmorPipBoyUI::Settings
+{
+	void Load() noexcept;
+
+	[[nodiscard]] bool ForcePowerArmorPipboy() noexcept;
+	[[nodiscard]] bool PowerArmorAudio() noexcept;
+	[[nodiscard]] bool KeepPipboyLightOn() noexcept;
+	[[nodiscard]] bool DebugLoggingEnabled() noexcept;
+}
