@@ -4,6 +4,7 @@ namespace
 {
 	using ActorInPowerArmor_t = bool (*)(const RE::Actor&);
 	using PlayPipboyOpenAnim_t = void (*)(RE::PipboyManager*, const RE::BSFixedString&);
+	using PlayPipboyCloseAnim_t = void (*)(RE::PipboyManager*, bool);
 	using PlayPipboyGenericOpenAnim_t = void (*)(
 		RE::PipboyManager*,
 		const RE::BSFixedString&,
@@ -68,8 +69,24 @@ namespace
 		CallSite{ 1477369, 0x313, "Pip-Boy opened (keep Pip-Boy light on)"sv },
 	};
 
+	// Every direct 1.10.163 caller of PipboyManager::PlayPipboyCloseAnim. Calls
+	// that request an animated close must be completed synchronously for our
+	// screen-only presentation: the non-PA player graph cannot produce the PA
+	// close event. Intercepting all callers also covers deferred closes such as
+	// map fast travel; the input-vtable hook alone sees only keyboard/controller
+	// button events.
+	constexpr std::array kPipboyCloseCallOffsets{
+		0xB334FA,
+		0xB937F2,
+		0xB93805,
+		0xBC8148,
+		0xC1F5D8,
+		0xE1D205,
+	};
+
 	ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
 	PlayPipboyOpenAnim_t g_playPipboyOpenAnim = nullptr;
+	PlayPipboyCloseAnim_t g_playPipboyCloseAnim = nullptr;
 	PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
 	PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
 	RE::NiPointer<RE::NiNode> g_powerArmorPipboyScreen;
@@ -238,6 +255,46 @@ namespace
 		       g_pipboyMenuShouldHandleEvent(a_inputUser, a_event);
 	}
 
+	void CompleteForcedPipboyClose(RE::PipboyManager* a_manager)
+	{
+		if (!a_manager->QPipboyActive()) {
+			SetPipboyActive(a_manager, true);
+			REX::WARN("Repaired missing Pip-Boy active state before close");
+		}
+
+		const bool hadPendingItemAnimation = a_manager->itemAnimOnClose != nullptr;
+		const bool hadPendingFastTravel = static_cast<bool>(a_manager->fastTravelLocation);
+
+		// Start the normal PA close. This selects the PA completion event and keeps
+		// itemAnimOnClose/fastTravelLocation intact. The native a_noAnim=true path
+		// cannot be used: OnPipboyCloseAnim deliberately clears both deferred fields
+		// when it sees that event. Since the player's non-PA behavior graph cannot
+		// report the PA completion event, deliver it synchronously ourselves.
+		g_playPipboyCloseAnim(a_manager, false);
+		if (a_manager->QPipboyActive()) {
+			a_manager->OnPipboyCloseAnim();
+		}
+
+		g_forceThisOpen.store(false, std::memory_order_relaxed);
+		REX::INFO(
+			"Completed synthetic PA close: active={} opening={} closing={} pendingItem={} pendingFastTravel={}",
+			a_manager->QPipboyActive(),
+			a_manager->pipboyOpening,
+			a_manager->pipboyClosing,
+			hadPendingItemAnimation,
+			hadPendingFastTravel);
+	}
+
+	void PlayPipboyCloseForForcedPresentation(RE::PipboyManager* a_manager, const bool a_noAnim)
+	{
+		if (g_forceThisOpen.load(std::memory_order_relaxed) && !a_noAnim) {
+			CompleteForcedPipboyClose(a_manager);
+			return;
+		}
+
+		g_playPipboyCloseAnim(a_manager, a_noAnim);
+	}
+
 	void HandleForcedPipboyClose(
 		RE::BSInputEventUser* a_inputUser,
 		const RE::ButtonEvent* a_event)
@@ -254,25 +311,9 @@ namespace
 					manager->pipboyClosing,
 					manager->loweringReason.underlying());
 
-				if (!activeBefore) {
-					SetPipboyActive(manager, true);
-					REX::WARN("Repaired missing Pip-Boy active state before close");
-				}
-
-				// A normal kHide eventually calls PlayPipboyCloseAnim(false), which queues
-				// a lower-wrist behavior-graph event. Our forced open never raised the
-				// wrist, so that completion event cannot arrive. The native no-animation
-				// branch performs OnPipboyCloseAnim/OnPipboyClosed synchronously and still
-				// runs the complete engine teardown.
-				manager->PlayPipboyCloseAnim(true);
+				CompleteForcedPipboyClose(manager);
 				const_cast<RE::ButtonEvent*>(a_event)->handled =
 					RE::InputEvent::HANDLED_RESULT::kStop;
-				g_forceThisOpen.store(false, std::memory_order_relaxed);
-				REX::INFO(
-					"Completed immediate native close: active={} opening={} closing={}",
-					manager->QPipboyActive(),
-					manager->pipboyOpening,
-					manager->pipboyClosing);
 				return;
 			}
 
@@ -396,6 +437,7 @@ namespace
 		const auto tabHandlerCall = REL::ID(181358).address() + 0x23F;
 		const auto companionUseItemCall = REL::Offset(0x9FC974).address();
 		const auto playPipboyOpenAnimAddress = REL::ID(663900).address();
+		const auto playPipboyCloseAnimAddress = REL::ID(273927).address();
 		if (*reinterpret_cast<const std::uint8_t*>(tabHandlerCall) != 0xE8 ||
 			GetCallTarget(tabHandlerCall) != playPipboyOpenAnimAddress) {
 			REX::ERROR("Unexpected Tab-handler call at 0x{:X}; refusing to patch", tabHandlerCall);
@@ -405,6 +447,18 @@ namespace
 			GetCallTarget(companionUseItemCall) != playPipboyOpenAnimAddress) {
 			REX::ERROR("Unexpected companion use-item call at 0x{:X}; refusing to patch", companionUseItemCall);
 			return false;
+		}
+
+		std::vector<std::uintptr_t> pipboyCloseCalls;
+		pipboyCloseCalls.reserve(kPipboyCloseCallOffsets.size());
+		for (const auto offset : kPipboyCloseCallOffsets) {
+			const auto address = REL::Offset(offset).address();
+			if (*reinterpret_cast<const std::uint8_t*>(address) != 0xE8 ||
+				GetCallTarget(address) != playPipboyCloseAnimAddress) {
+				REX::ERROR("Unexpected PlayPipboyCloseAnim call at 0x{:X}; refusing to patch", address);
+				return false;
+			}
+			pipboyCloseCalls.push_back(address);
 		}
 
 		// PipboyMenu's secondary BSInputEventUser vtable. Hook the two input methods
@@ -439,14 +493,20 @@ namespace
 			trampoline.write_call<5>(tabHandlerCall, OpenPipboyWithoutWristAnimation));
 		trampoline.write_call<5>(companionUseItemCall, OpenPipboyWithoutWristAnimation);
 
+		g_playPipboyCloseAnim = reinterpret_cast<PlayPipboyCloseAnim_t>(playPipboyCloseAnimAddress);
+		for (const auto address : pipboyCloseCalls) {
+			trampoline.write_call<5>(address, PlayPipboyCloseForForcedPresentation);
+		}
+
 		g_pipboyMenuShouldHandleEvent = reinterpret_cast<PipboyMenuShouldHandleEvent_t>(
 			pipboyMenuInputVtable.write_vfunc(shouldHandleEventIndex, ShouldHandleForcedPipboyClose));
 		g_pipboyMenuOnButtonEvent = reinterpret_cast<PipboyMenuOnButtonEvent_t>(
 			pipboyMenuInputVtable.write_vfunc(onButtonEventIndex, HandleForcedPipboyClose));
 
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, and the forced-close input fallback",
-			presentationAddresses.size());
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} close overrides, and the forced-close input fallback",
+			presentationAddresses.size(),
+			pipboyCloseCalls.size());
 		return true;
 	}
 
@@ -454,9 +514,10 @@ namespace
 	{
 		if (a_message->type == F4SE::MessagingInterface::kGameDataReady && a_message->data &&
 			g_forcePowerArmorPipboy) {
-			// Warm the resource cache outside the input handler. If this fails, the first
-			// open retries and then safely falls back to the wrist presentation.
-			(void)LoadPowerArmorPipboyScreen();
+			// Load and attach the quad before the first menu frame. Loading only the NIF
+			// here but attaching it during the first open exposed one black setup frame.
+			// If this is still too early, the first open retries safely.
+			(void)EnsurePowerArmorPipboyGeometry();
 		}
 	}
 }
@@ -467,7 +528,7 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 		.log = true,
 		.logName = "PowerArmorPipBoyUI",
 		.trampoline = true,
-		.trampolineSize = 256,
+		.trampolineSize = 512,
 	});
 
 	if (a_f4se->RuntimeVersion() != F4SE::RUNTIME_1_10_163) {
