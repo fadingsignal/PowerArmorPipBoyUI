@@ -12,6 +12,9 @@ namespace
 		bool);
 	using PipboyMenuShouldHandleEvent_t = bool (*)(RE::BSInputEventUser*, const RE::InputEvent*);
 	using PipboyMenuOnButtonEvent_t = void (*)(RE::BSInputEventUser*, const RE::ButtonEvent*);
+	using FirstPersonStateUpdate_t = void (*)(
+		RE::TESCameraState*,
+		RE::BSTSmartPointer<RE::TESCameraState>&);
 	using SetPipboyActive_t = bool (*)(
 		RE::BSTValueEventSource<RE::IsPipboyActiveEvent>*,
 		const bool*);
@@ -89,8 +92,11 @@ namespace
 	PlayPipboyCloseAnim_t g_playPipboyCloseAnim = nullptr;
 	PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
 	PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
+	FirstPersonStateUpdate_t g_firstPersonStateUpdate = nullptr;
 	RE::NiPointer<RE::NiNode> g_powerArmorPipboyScreen;
 	std::atomic_bool g_forceThisOpen = false;
+	std::atomic_bool g_loggedFirstPersonFreeze = false;
+	std::atomic_bool g_deferNextScreenReveal = true;
 	bool g_forcePowerArmorPipboy = true;
 	bool g_powerArmorAudio = false;
 	bool g_keepPipboyLightOn = false;
@@ -181,7 +187,10 @@ namespace
 		g_powerArmorPipboyScreen->SetLocalTranslate({ -0.5F, 325.0F, -37.0F });
 		RE::NiUpdateData updateData{};
 		g_powerArmorPipboyScreen->Update(updateData);
-		g_powerArmorPipboyScreen->SetAppCulled(false);
+		// Keep the standalone child hidden until the Pip-Boy renderer has configured
+		// its screen-attached surface. PowerArmorGeometry::ShowPipboyPAGeometry will
+		// unhide it during open; the first open is reculled for one setup frame below.
+		g_powerArmorPipboyScreen->SetAppCulled(true);
 
 		REX::INFO("Loaded PADashPipboyScreen.nif without the Power Armor dashboard");
 		return true;
@@ -206,6 +215,46 @@ namespace
 		geometry->pipboyPAGlass = g_powerArmorPipboyScreen;
 		REX::INFO("Attached the standalone screen to PowerArmorGeometry::pipboyPAGlass");
 		return true;
+	}
+
+	void DetachStandalonePowerArmorPipboyGeometry()
+	{
+		auto* geometry = RE::PowerArmorGeometry::GetSingleton();
+		if (geometry && geometry->pipboyPAGlass.get() == g_powerArmorPipboyScreen.get()) {
+			g_powerArmorPipboyScreen->SetAppCulled(true);
+			geometry->pipboyPAGlass.reset();
+			REX::INFO("Detached the standalone screen after the forced Pip-Boy session");
+		}
+	}
+
+	void DeferFirstScreenReveal()
+	{
+		auto* geometry = RE::PowerArmorGeometry::GetSingleton();
+		if (!g_deferNextScreenReveal.exchange(false, std::memory_order_relaxed) ||
+			!g_powerArmorPipboyScreen || !geometry ||
+			geometry->pipboyPAGlass.get() != g_powerArmorPipboyScreen.get()) {
+			return;
+		}
+
+		// On the first open, the Interface3D renderer and Scaleform render target are
+		// initialized in the same call that unhides this quad. Re-cull it before that
+		// frame is presented, then reveal it on the following update once the texture
+		// has valid contents. Subsequent opens use the warmed renderer immediately.
+		g_powerArmorPipboyScreen->SetAppCulled(true);
+		if (const auto* tasks = F4SE::GetTaskInterface()) {
+			tasks->AddTask([] {
+				auto* manager = RE::PipboyManager::GetSingleton();
+				if (g_forceThisOpen.load(std::memory_order_relaxed) && manager &&
+					manager->QPipboyActive() && g_powerArmorPipboyScreen) {
+					g_powerArmorPipboyScreen->SetAppCulled(false);
+					RE::NiUpdateData updateData{};
+					g_powerArmorPipboyScreen->Update(updateData);
+					REX::INFO("Revealed the warmed Pip-Boy screen after its setup frame");
+				}
+			});
+		} else {
+			g_powerArmorPipboyScreen->SetAppCulled(false);
+		}
 	}
 
 	bool UsePowerArmorPipboy(const RE::Actor& a_actor)
@@ -275,6 +324,7 @@ namespace
 			a_manager->OnPipboyCloseAnim();
 		}
 
+		DetachStandalonePowerArmorPipboyGeometry();
 		g_forceThisOpen.store(false, std::memory_order_relaxed);
 		REX::INFO(
 			"Completed synthetic PA close: active={} opening={} closing={} pendingItem={} pendingFastTravel={}",
@@ -323,6 +373,25 @@ namespace
 		g_pipboyMenuOnButtonEvent(a_inputUser, a_event);
 	}
 
+	void UpdateFirstPersonCameraForForcedPresentation(
+		RE::TESCameraState* a_state,
+		RE::BSTSmartPointer<RE::TESCameraState>& a_nextState)
+	{
+		if (g_forceThisOpen.load(std::memory_order_relaxed)) {
+			// The first-person state samples the animated camera node and applies its
+			// locomotion smoothing every frame, even while the Pip-Boy menu has paused
+			// the world. A real PA graph supplies a stationary camera pose here. Freeze
+			// only this state for our screen-only presentation instead of entering a
+			// Pip-Boy camera mode, which changes the camera stack and return view.
+			if (!g_loggedFirstPersonFreeze.exchange(true, std::memory_order_relaxed)) {
+				REX::INFO("Froze first-person camera updates for the forced Pip-Boy session");
+			}
+			return;
+		}
+
+		g_firstPersonStateUpdate(a_state, a_nextState);
+	}
+
 	void OpenPipboyWithoutWristAnimation(
 		RE::PipboyManager* a_manager,
 		const RE::BSFixedString& a_menuName)
@@ -332,6 +401,7 @@ namespace
 		// early reset sends a forced open into the wrist-lowering behavior graph,
 		// whose completion event cannot arrive because the wrist was never raised.
 		g_forceThisOpen.store(false, std::memory_order_relaxed);
+		g_loggedFirstPersonFreeze.store(false, std::memory_order_relaxed);
 
 		if (!g_forcePowerArmorPipboy) {
 			g_playPipboyOpenAnim(a_manager, a_menuName);
@@ -361,6 +431,7 @@ namespace
 		};
 		const RE::BSFixedString noAnimationEvent{};
 		playGenericOpen(a_manager, a_menuName, noAnimationEvent, true);
+		DeferFirstScreenReveal();
 
 		// The immediate generic path should establish this in OnPipboyOpened. Repair
 		// it through the engine's event-producing setter if that handoff was skipped;
@@ -475,6 +546,20 @@ namespace
 			return false;
 		}
 
+		// FirstPersonState::Update is vfunc 0x0B after BSInputEventUser's entries.
+		// It is the point where the camera resamples the first-person graph and
+		// advances locomotion interpolation. Hooking it lets a forced menu hold the
+		// current view without changing PlayerCamera's state stack.
+		REL::Relocation<std::uintptr_t> firstPersonStateVtable{ REL::ID(246953) };
+		constexpr std::size_t firstPersonStateUpdateIndex = 0x0B;
+		const auto* firstPersonStateEntries = reinterpret_cast<const std::uintptr_t*>(
+			firstPersonStateVtable.address());
+		if (firstPersonStateEntries[firstPersonStateUpdateIndex] !=
+			REL::Offset(0x1243220).address()) {
+			REX::ERROR("Unexpected FirstPersonState vtable; refusing to patch");
+			return false;
+		}
+
 		auto& trampoline = REL::GetTrampoline();
 		for (const auto address : presentationAddresses) {
 			trampoline.write_call<5>(address, UsePowerArmorPipboy);
@@ -502,9 +587,13 @@ namespace
 			pipboyMenuInputVtable.write_vfunc(shouldHandleEventIndex, ShouldHandleForcedPipboyClose));
 		g_pipboyMenuOnButtonEvent = reinterpret_cast<PipboyMenuOnButtonEvent_t>(
 			pipboyMenuInputVtable.write_vfunc(onButtonEventIndex, HandleForcedPipboyClose));
+		g_firstPersonStateUpdate = reinterpret_cast<FirstPersonStateUpdate_t>(
+			firstPersonStateVtable.write_vfunc(
+				firstPersonStateUpdateIndex,
+				UpdateFirstPersonCameraForForcedPresentation));
 
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, {} close overrides, and the forced-close input fallback",
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} close overrides, the forced-close input fallback, and the first-person camera freeze",
 			presentationAddresses.size(),
 			pipboyCloseCalls.size());
 		return true;
@@ -512,12 +601,24 @@ namespace
 
 	void OnF4SEMessage(F4SE::MessagingInterface::Message* a_message)
 	{
-		if (a_message->type == F4SE::MessagingInterface::kGameDataReady && a_message->data &&
-			g_forcePowerArmorPipboy) {
-			// Load and attach the quad before the first menu frame. Loading only the NIF
-			// here but attaching it during the first open exposed one black setup frame.
-			// If this is still too early, the first open retries safely.
-			(void)EnsurePowerArmorPipboyGeometry();
+		if (!g_forcePowerArmorPipboy) {
+			return;
+		}
+
+		if (a_message->type == F4SE::MessagingInterface::kGameDataReady && a_message->data) {
+			// The resource database is ready here, but PowerArmorGeometry is not created
+			// until the playable game/HUD exists. Warm only the NIF at this stage.
+			(void)LoadPowerArmorPipboyScreen();
+			return;
+		}
+
+		if (a_message->type == F4SE::MessagingInterface::kPostLoadGame ||
+			a_message->type == F4SE::MessagingInterface::kNewGame) {
+			g_deferNextScreenReveal.store(true, std::memory_order_relaxed);
+			// Do not occupy PowerArmorGeometry::pipboyPAGlass outside a forced menu
+			// session. The genuine PA preload owns that slot. The NIF itself is already
+			// cached; first-frame conceal/reveal handles render-target initialization.
+			(void)LoadPowerArmorPipboyScreen();
 		}
 	}
 }
