@@ -109,7 +109,15 @@ failure is logged.
 
 ## Building
 
-The project expects CommonLibF4 in the sibling directory `../commonlibf4`.
+Building requires xmake 3.0.0 or newer and a C++23-capable Visual Studio 2022
+toolchain.
+
+CommonLibF4 is pinned in the `extern/commonlibf4` submodule. Clone the
+repository recursively, or initialize the dependency in an existing checkout:
+
+```powershell
+git submodule update --init --recursive
+```
 
 ```powershell
 xmake f -m releasedbg
@@ -118,3 +126,6 @@ xmake install -o dist
 ```
 
 The packaged DLL, PDB, and INI are written beneath `dist/F4SE/Plugins`.
+Keep the explicit `-o dist` argument: it prevents CommonLibF4's optional
+`XSE_FO4_MODS_PATH` or `XSE_FO4_GAME_PATH` environment variables from sending
+the package to a mod-manager or game directory instead.

@@ -1,5 +1,5 @@
--- CommonLibF4 is kept as a sibling checkout at G:/git/commonlibf4.
-includes("../commonlibf4")
+-- CommonLibF4 is pinned as a repository submodule for reproducible builds.
+includes("extern/commonlibf4")
 
 -- set project constants
 set_project("PowerArmorPipBoyUI")
