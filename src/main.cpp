@@ -100,6 +100,10 @@ namespace
 	bool g_forcePowerArmorPipboy = true;
 	bool g_powerArmorAudio = true;
 	bool g_keepPipboyLightOn = true;
+	bool g_usePipboyEffectColor = false;
+	bool g_savedPowerArmorEffectColor = false;
+	bool g_loggedMissingEffectColorSetting = false;
+	std::array<float, 3> g_originalPowerArmorEffectColor{};
 
 	bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
 	{
@@ -135,29 +139,125 @@ namespace
 			a_iniPath.c_str()) != 0;
 	}
 
+	[[nodiscard]] RE::Setting* GetFloatINISetting(const char* a_name)
+	{
+		auto* setting = RE::GetINISetting(a_name);
+		return setting && setting->GetType() == RE::Setting::SETTING_TYPE::kFloat ?
+		           setting :
+		           nullptr;
+	}
+
+	void ApplyPipboyEffectColor()
+	{
+		if (!g_usePipboyEffectColor && !g_savedPowerArmorEffectColor) {
+			return;
+		}
+
+		constexpr std::array pipboyColorNames{
+			"fPipboyEffectColorR:Pipboy",
+			"fPipboyEffectColorG:Pipboy",
+			"fPipboyEffectColorB:Pipboy",
+		};
+		constexpr std::array powerArmorColorNames{
+			"fPAEffectColorR:Pipboy",
+			"fPAEffectColorG:Pipboy",
+			"fPAEffectColorB:Pipboy",
+		};
+
+		std::array<RE::Setting*, 3> powerArmorSettings{};
+		for (std::size_t i = 0; i < powerArmorSettings.size(); ++i) {
+			powerArmorSettings[i] = GetFloatINISetting(powerArmorColorNames[i]);
+			if (!powerArmorSettings[i]) {
+				if (!g_loggedMissingEffectColorSetting) {
+					REX::WARN(
+						"Could not resolve {}; the Power Armor Pip-Boy effect color was not changed",
+						powerArmorColorNames[i]);
+					g_loggedMissingEffectColorSetting = true;
+				}
+				return;
+			}
+		}
+
+		if (!g_usePipboyEffectColor) {
+			if (g_savedPowerArmorEffectColor) {
+				for (std::size_t i = 0; i < powerArmorSettings.size(); ++i) {
+					powerArmorSettings[i]->SetFloat(g_originalPowerArmorEffectColor[i]);
+				}
+				REX::INFO(
+					"Restored Power Armor Pip-Boy effect color: R={:.4f} G={:.4f} B={:.4f}",
+					g_originalPowerArmorEffectColor[0],
+					g_originalPowerArmorEffectColor[1],
+					g_originalPowerArmorEffectColor[2]);
+				g_savedPowerArmorEffectColor = false;
+			}
+			return;
+		}
+
+		std::array<float, 3> pipboyColor{};
+		for (std::size_t i = 0; i < pipboyColor.size(); ++i) {
+			const auto* setting = GetFloatINISetting(pipboyColorNames[i]);
+			if (!setting || !std::isfinite(setting->GetFloat())) {
+				if (!g_loggedMissingEffectColorSetting) {
+					REX::WARN(
+						"Could not read a finite value from {}; the Power Armor Pip-Boy effect color was not changed",
+						pipboyColorNames[i]);
+					g_loggedMissingEffectColorSetting = true;
+				}
+				return;
+			}
+			pipboyColor[i] = setting->GetFloat();
+		}
+
+		if (!g_savedPowerArmorEffectColor) {
+			for (std::size_t i = 0; i < powerArmorSettings.size(); ++i) {
+				g_originalPowerArmorEffectColor[i] = powerArmorSettings[i]->GetFloat();
+			}
+			g_savedPowerArmorEffectColor = true;
+		}
+
+		bool changed = false;
+		for (std::size_t i = 0; i < powerArmorSettings.size(); ++i) {
+			changed = changed || powerArmorSettings[i]->GetFloat() != pipboyColor[i];
+			powerArmorSettings[i]->SetFloat(pipboyColor[i]);
+		}
+		if (changed) {
+			REX::INFO(
+				"Applied Fallout4Prefs.ini Pip-Boy effect color to the Power Armor Pip-Boy: R={:.4f} G={:.4f} B={:.4f}",
+				pipboyColor[0],
+				pipboyColor[1],
+				pipboyColor[2]);
+		}
+		g_loggedMissingEffectColorSetting = false;
+	}
+
 	void LoadSettings()
 	{
 		const auto iniPath = GetIniPath();
 		const bool forcePowerArmorPipboy = GetSetting(iniPath, L"bForcePowerArmorPipboy", true);
 		const bool powerArmorAudio = GetSetting(iniPath, L"bPowerArmorAudio", true);
 		const bool keepPipboyLightOn = GetSetting(iniPath, L"bKeepPipboyLightOn", true);
+		const bool usePipboyEffectColor = GetSetting(iniPath, L"bUsePipboyEffectColor", false);
 
 		static bool firstLoad = true;
 		const bool changed =
 			forcePowerArmorPipboy != g_forcePowerArmorPipboy ||
 			powerArmorAudio != g_powerArmorAudio ||
-			keepPipboyLightOn != g_keepPipboyLightOn;
+			keepPipboyLightOn != g_keepPipboyLightOn ||
+			usePipboyEffectColor != g_usePipboyEffectColor;
 
 		g_forcePowerArmorPipboy = forcePowerArmorPipboy;
 		g_powerArmorAudio = powerArmorAudio;
 		g_keepPipboyLightOn = keepPipboyLightOn;
+		g_usePipboyEffectColor = usePipboyEffectColor;
+		ApplyPipboyEffectColor();
 
 		if (firstLoad || changed) {
 			REX::INFO(
-				"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} ({})",
+				"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bUsePipboyEffectColor={} ({})",
 				g_forcePowerArmorPipboy,
 				g_powerArmorAudio,
 				g_keepPipboyLightOn,
+				g_usePipboyEffectColor,
 				iniPath.string());
 		}
 		firstLoad = false;

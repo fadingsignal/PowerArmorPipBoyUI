@@ -48,12 +48,19 @@ Install `PowerArmorPipBoyUI.ini` beside the DLL in `Data/F4SE/Plugins`:
 bForcePowerArmorPipboy=1
 bPowerArmorAudio=1
 bKeepPipboyLightOn=1
+bUsePipboyEffectColor=0
 ```
 
 Settings are reloaded whenever the Pip-Boy opens and before a forced close, so
 editing the INI does not require restarting Fallout 4. Presentation changes take
 effect on the next open; an audio change made while the menu is open can affect
 its close sound.
+
+Set `bUsePipboyEffectColor` to `1` to use the player's
+`fPipboyEffectColorR/G/B` values from `Fallout4Prefs.ini` in place of the Power
+Armor Pip-Boy's fixed `fPAEffectColorR/G/B` orange. This affects both genuine
+and forced Power Armor Pip-Boy presentations. `bPipboyDisableFX` continues to
+control whether Fallout 4 renders the Pip-Boy scanline/effect pass at all.
 
 Settings are read when the plugin loads. Set `bForcePowerArmorPipboy` to `0` to
 restore the normal wrist-mounted Pip-Boy presentation.
