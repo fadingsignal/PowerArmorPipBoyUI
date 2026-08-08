@@ -46,9 +46,14 @@ Install `PowerArmorPipBoyUI.ini` beside the DLL in `Data/F4SE/Plugins`:
 ```ini
 [General]
 bForcePowerArmorPipboy=1
-bPowerArmorAudio=0
-bKeepPipboyLightOn=0
+bPowerArmorAudio=1
+bKeepPipboyLightOn=1
 ```
+
+Settings are reloaded whenever the Pip-Boy opens and before a forced close, so
+editing the INI does not require restarting Fallout 4. Presentation changes take
+effect on the next open; an audio change made while the menu is open can affect
+its close sound.
 
 Settings are read when the plugin loads. Set `bForcePowerArmorPipboy` to `0` to
 restore the normal wrist-mounted Pip-Boy presentation.

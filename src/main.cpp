@@ -98,8 +98,8 @@ namespace
 	std::atomic_bool g_loggedFirstPersonFreeze = false;
 	std::atomic_bool g_deferNextScreenReveal = true;
 	bool g_forcePowerArmorPipboy = true;
-	bool g_powerArmorAudio = false;
-	bool g_keepPipboyLightOn = false;
+	bool g_powerArmorAudio = true;
+	bool g_keepPipboyLightOn = true;
 
 	bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
 	{
@@ -138,16 +138,29 @@ namespace
 	void LoadSettings()
 	{
 		const auto iniPath = GetIniPath();
-		g_forcePowerArmorPipboy = GetSetting(iniPath, L"bForcePowerArmorPipboy", true);
-		g_powerArmorAudio = GetSetting(iniPath, L"bPowerArmorAudio", false);
-		g_keepPipboyLightOn = GetSetting(iniPath, L"bKeepPipboyLightOn", false);
+		const bool forcePowerArmorPipboy = GetSetting(iniPath, L"bForcePowerArmorPipboy", true);
+		const bool powerArmorAudio = GetSetting(iniPath, L"bPowerArmorAudio", true);
+		const bool keepPipboyLightOn = GetSetting(iniPath, L"bKeepPipboyLightOn", true);
 
-		REX::INFO(
-			"bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} ({})",
-			g_forcePowerArmorPipboy,
-			g_powerArmorAudio,
-			g_keepPipboyLightOn,
-			iniPath.string());
+		static bool firstLoad = true;
+		const bool changed =
+			forcePowerArmorPipboy != g_forcePowerArmorPipboy ||
+			powerArmorAudio != g_powerArmorAudio ||
+			keepPipboyLightOn != g_keepPipboyLightOn;
+
+		g_forcePowerArmorPipboy = forcePowerArmorPipboy;
+		g_powerArmorAudio = powerArmorAudio;
+		g_keepPipboyLightOn = keepPipboyLightOn;
+
+		if (firstLoad || changed) {
+			REX::INFO(
+				"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} ({})",
+				g_forcePowerArmorPipboy,
+				g_powerArmorAudio,
+				g_keepPipboyLightOn,
+				iniPath.string());
+		}
+		firstLoad = false;
 	}
 
 	// The PA presentation needs only this screen quad. PowerArmorGeometry normally loads
@@ -306,6 +319,11 @@ namespace
 
 	void CompleteForcedPipboyClose(RE::PipboyManager* a_manager)
 	{
+		// Pick up an audio-setting edit made while this menu was open. Presentation
+		// mode remains latched until teardown so changing the master switch mid-menu
+		// cannot strand the session in a half-forced state.
+		LoadSettings();
+
 		if (!a_manager->QPipboyActive()) {
 			SetPipboyActive(a_manager, true);
 			REX::WARN("Repaired missing Pip-Boy active state before close");
@@ -396,6 +414,10 @@ namespace
 		RE::PipboyManager* a_manager,
 		const RE::BSFixedString& a_menuName)
 	{
+		// INI changes become effective at the next stable presentation boundary;
+		// Fallout 4 does not need to be restarted.
+		LoadSettings();
+
 		// Reset at the beginning of the next open, never during shutdown. The close
 		// path tests ActorInPowerArmor several more times after its audio check; an
 		// early reset sends a forced open into the wrist-lowering behavior graph,
