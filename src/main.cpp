@@ -387,7 +387,7 @@ namespace
 		       (g_keepPipboyLightOn && g_forceThisOpen.load(std::memory_order_relaxed));
 	}
 
-	[[nodiscard]] bool IsForcedPipboyCloseEvent(const RE::InputEvent* a_event)
+	[[nodiscard]] bool IsForcedPipboyToggleEvent(const RE::InputEvent* a_event)
 	{
 		if (!g_forceThisOpen.load(std::memory_order_relaxed) || !a_event) {
 			return false;
@@ -406,6 +406,24 @@ namespace
 		       buttonEvent->GetBSButtonCode() == RE::BS_BUTTON_CODE::kTab;
 	}
 
+	[[nodiscard]] bool IsForcedPipboyCloseEvent(const RE::InputEvent* a_event)
+	{
+		if (!IsForcedPipboyToggleEvent(a_event)) {
+			return false;
+		}
+
+		// PipboyMenu owns Tab/Cancel while a nested presentation is active. Item
+		// inspection clears pipboyExamineMode before it finishes raising the Pip-Boy,
+		// but loweringReason remains kInspect until the inventory has been restored.
+		// Closing during either phase bypasses that unwind and leaves its input layer
+		// enabled, locking gameplay controls.
+		const auto* manager = RE::PipboyManager::GetSingleton();
+		return !manager ||
+		       (!manager->pipboyExamineMode && !manager->pipboyRaising &&
+			   manager->loweringReason.underlying() ==
+				   std::to_underlying(RE::PipboyManager::LOWER_REASON::kNone));
+	}
+
 	bool ShouldHandleForcedPipboyClose(
 		RE::BSInputEventUser* a_inputUser,
 		const RE::InputEvent* a_event)
@@ -413,7 +431,7 @@ namespace
 		// PipboyMenu normally rejects every event while any PipboyManager transition
 		// flag is set. Always admit the toggle button for our immediate presentation
 		// so it can reach the native close fallback below.
-		return IsForcedPipboyCloseEvent(a_event) ||
+		return IsForcedPipboyToggleEvent(a_event) ||
 		       g_pipboyMenuShouldHandleEvent(a_inputUser, a_event);
 	}
 
@@ -467,6 +485,18 @@ namespace
 		RE::BSInputEventUser* a_inputUser,
 		const RE::ButtonEvent* a_event)
 	{
+		if (IsForcedPipboyToggleEvent(a_event) && !IsForcedPipboyCloseEvent(a_event)) {
+			if (const auto* manager = RE::PipboyManager::GetSingleton()) {
+				REX::INFO(
+					"Passing Pip-Boy toggle to nested presentation: examine={} raising={} loweringReason={}",
+					manager->pipboyExamineMode,
+					manager->pipboyRaising,
+					manager->loweringReason.underlying());
+			}
+			g_pipboyMenuOnButtonEvent(a_inputUser, a_event);
+			return;
+		}
+
 		if (IsForcedPipboyCloseEvent(a_event)) {
 			if (auto* manager = RE::PipboyManager::GetSingleton()) {
 				const bool activeBefore = manager->QPipboyActive();
