@@ -59,6 +59,11 @@ Both the Tab/Pip-Boy input handler and the Pip-Boy companion app's use-item
 command are redirected to the instant no-animation open. Terminal interaction
 is deliberately left alone because `TerminalMenu` is a separate presentation.
 
+While a forced menu is open, its native input handler recognizes the Pip-Boy
+toggle and queues the standard `PipboyMenu` hide message. This preserves the
+vanilla menu teardown while avoiding any dependency on the wrist animation
+graph for closing.
+
 ## Building
 
 The project expects CommonLibF4 in the sibling directory `../commonlibf4`.

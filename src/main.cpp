@@ -9,6 +9,11 @@ namespace
 		const RE::BSFixedString&,
 		const RE::BSFixedString&,
 		bool);
+	using PipboyMenuShouldHandleEvent_t = bool (*)(RE::BSInputEventUser*, const RE::InputEvent*);
+	using PipboyMenuOnButtonEvent_t = void (*)(RE::BSInputEventUser*, const RE::ButtonEvent*);
+	using SetPipboyActive_t = bool (*)(
+		RE::BSTValueEventSource<RE::IsPipboyActiveEvent>*,
+		const bool*);
 
 	struct CallSite
 	{
@@ -65,11 +70,22 @@ namespace
 
 	ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
 	PlayPipboyOpenAnim_t g_playPipboyOpenAnim = nullptr;
+	PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
+	PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
 	RE::NiPointer<RE::NiNode> g_powerArmorPipboyScreen;
 	std::atomic_bool g_forceThisOpen = false;
 	bool g_forcePowerArmorPipboy = true;
 	bool g_powerArmorAudio = false;
 	bool g_keepPipboyLightOn = false;
+
+	bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
+	{
+		// BSTValueEventSource's engine setter locks the value and broadcasts an
+		// IsPipboyActiveEvent when it changes. This is the same function called by
+		// PipboyManager::OnPipboyOpened/Closed in Fallout 4 1.10.163.
+		static REL::Relocation<SetPipboyActive_t> setActive{ REL::ID(318434) };
+		return setActive(std::addressof(a_manager->pipboyActive), std::addressof(a_active));
+	}
 
 	[[nodiscard]] std::filesystem::path GetIniPath()
 	{
@@ -192,6 +208,80 @@ namespace
 		       (g_keepPipboyLightOn && g_forceThisOpen.load(std::memory_order_relaxed));
 	}
 
+	[[nodiscard]] bool IsForcedPipboyCloseEvent(const RE::InputEvent* a_event)
+	{
+		if (!g_forceThisOpen.load(std::memory_order_relaxed) || !a_event) {
+			return false;
+		}
+
+		const auto* buttonEvent = a_event->As<RE::ButtonEvent>();
+		if (!buttonEvent || !buttonEvent->QJustPressed()) {
+			return false;
+		}
+
+		// Gameplay calls the toggle "Pipboy", while the BasicMenuNav context can
+		// remap the same control to "Cancel" after the menu is on the stack. Match
+		// both semantic events, and retain the physical Tab identity as a fallback.
+		const auto& userEvent = buttonEvent->QUserEvent();
+		return userEvent == "Pipboy"sv || userEvent == "Cancel"sv ||
+		       buttonEvent->GetBSButtonCode() == RE::BS_BUTTON_CODE::kTab;
+	}
+
+	bool ShouldHandleForcedPipboyClose(
+		RE::BSInputEventUser* a_inputUser,
+		const RE::InputEvent* a_event)
+	{
+		// PipboyMenu normally rejects every event while any PipboyManager transition
+		// flag is set. Always admit the toggle button for our immediate presentation
+		// so it can reach the native close fallback below.
+		return IsForcedPipboyCloseEvent(a_event) ||
+		       g_pipboyMenuShouldHandleEvent(a_inputUser, a_event);
+	}
+
+	void HandleForcedPipboyClose(
+		RE::BSInputEventUser* a_inputUser,
+		const RE::ButtonEvent* a_event)
+	{
+		if (IsForcedPipboyCloseEvent(a_event)) {
+			if (auto* manager = RE::PipboyManager::GetSingleton()) {
+				const bool activeBefore = manager->QPipboyActive();
+				REX::INFO(
+					"Forced close input: event='{}' code=0x{:X} active={} opening={} closing={} loweringReason={}",
+					a_event->QUserEvent().c_str(),
+					static_cast<std::uint32_t>(a_event->GetBSButtonCode()),
+					activeBefore,
+					manager->pipboyOpening,
+					manager->pipboyClosing,
+					manager->loweringReason.underlying());
+
+				if (!activeBefore) {
+					SetPipboyActive(manager, true);
+					REX::WARN("Repaired missing Pip-Boy active state before close");
+				}
+
+				// A normal kHide eventually calls PlayPipboyCloseAnim(false), which queues
+				// a lower-wrist behavior-graph event. Our forced open never raised the
+				// wrist, so that completion event cannot arrive. The native no-animation
+				// branch performs OnPipboyCloseAnim/OnPipboyClosed synchronously and still
+				// runs the complete engine teardown.
+				manager->PlayPipboyCloseAnim(true);
+				const_cast<RE::ButtonEvent*>(a_event)->handled =
+					RE::InputEvent::HANDLED_RESULT::kStop;
+				g_forceThisOpen.store(false, std::memory_order_relaxed);
+				REX::INFO(
+					"Completed immediate native close: active={} opening={} closing={}",
+					manager->QPipboyActive(),
+					manager->pipboyOpening,
+					manager->pipboyClosing);
+				return;
+			}
+
+			REX::ERROR("PipboyManager is unavailable; passing the Pip-Boy toggle to vanilla");
+		}
+
+		g_pipboyMenuOnButtonEvent(a_inputUser, a_event);
+	}
+
 	void OpenPipboyWithoutWristAnimation(
 		RE::PipboyManager* a_manager,
 		const RE::BSFixedString& a_menuName)
@@ -230,6 +320,15 @@ namespace
 		};
 		const RE::BSFixedString noAnimationEvent{};
 		playGenericOpen(a_manager, a_menuName, noAnimationEvent, true);
+
+		// The immediate generic path should establish this in OnPipboyOpened. Repair
+		// it through the engine's event-producing setter if that handoff was skipped;
+		// PlayPipboyCloseAnim refuses to run at all while this value is false.
+		if (!a_manager->QPipboyActive()) {
+			SetPipboyActive(a_manager, true);
+			REX::WARN("Generic open omitted Pip-Boy active state; repaired it");
+		}
+		REX::INFO("Forced Pip-Boy open completed: active={}", a_manager->QPipboyActive());
 	}
 
 	[[nodiscard]] std::uintptr_t GetCallTarget(const std::uintptr_t a_callAddress)
@@ -308,6 +407,20 @@ namespace
 			return false;
 		}
 
+		// PipboyMenu's secondary BSInputEventUser vtable. Hook the two input methods
+		// needed to provide a native toggle-to-close fallback for forced opens. The
+		// exact entries and function IDs are validated before any hooks are written.
+		REL::Relocation<std::uintptr_t> pipboyMenuInputVtable{ REL::ID(85678) };
+		constexpr std::size_t shouldHandleEventIndex = 1;
+		constexpr std::size_t onButtonEventIndex = 8;
+		const auto* vtableEntries = reinterpret_cast<const std::uintptr_t*>(
+			pipboyMenuInputVtable.address());
+		if (vtableEntries[shouldHandleEventIndex] != REL::ID(607291).address() ||
+			vtableEntries[onButtonEventIndex] != REL::ID(75248).address()) {
+			REX::ERROR("Unexpected PipboyMenu input vtable; refusing to patch");
+			return false;
+		}
+
 		auto& trampoline = REL::GetTrampoline();
 		for (const auto address : presentationAddresses) {
 			trampoline.write_call<5>(address, UsePowerArmorPipboy);
@@ -326,8 +439,13 @@ namespace
 			trampoline.write_call<5>(tabHandlerCall, OpenPipboyWithoutWristAnimation));
 		trampoline.write_call<5>(companionUseItemCall, OpenPipboyWithoutWristAnimation);
 
+		g_pipboyMenuShouldHandleEvent = reinterpret_cast<PipboyMenuShouldHandleEvent_t>(
+			pipboyMenuInputVtable.write_vfunc(shouldHandleEventIndex, ShouldHandleForcedPipboyClose));
+		g_pipboyMenuOnButtonEvent = reinterpret_cast<PipboyMenuOnButtonEvent_t>(
+			pipboyMenuInputVtable.write_vfunc(onButtonEventIndex, HandleForcedPipboyClose));
+
 		REX::INFO(
-			"Installed {} presentation hooks and 2 no-animation open overrides",
+			"Installed {} presentation hooks, 2 no-animation open overrides, and the forced-close input fallback",
 			presentationAddresses.size());
 		return true;
 	}
