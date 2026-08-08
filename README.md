@@ -5,8 +5,15 @@ appears in power armor — an instant, translucent fullscreen overlay — withou
 raising or displaying the wrist-mounted Pip-Boy.
 
 The initial prototype supports Fallout 4 `1.10.163` only. It uses the Address
-Library to resolve each containing function and validates every instruction and
-target before writing anything.
+Library for most containing functions and validated runtime-specific offsets for
+a small number of call sites that have no reliable library ID. Every instruction
+and target is checked before the plugin writes anything.
+
+## Requirements
+
+- Fallout 4 `1.10.163`
+- F4SE `0.6.23`
+- Address Library for F4SE Plugins containing `version-1-10-163-0.bin`
 
 ## How it works
 
@@ -62,8 +69,8 @@ Armor Pip-Boy's fixed `fPAEffectColorR/G/B` orange. This affects both genuine
 and forced Power Armor Pip-Boy presentations. `bPipboyDisableFX` continues to
 control whether Fallout 4 renders the Pip-Boy scanline/effect pass at all.
 
-Settings are read when the plugin loads. Set `bForcePowerArmorPipboy` to `0` to
-restore the normal wrist-mounted Pip-Boy presentation.
+Set `bForcePowerArmorPipboy` to `0` to restore the normal wrist-mounted Pip-Boy
+presentation on the next open.
 
 ## Open paths
 
@@ -83,4 +90,7 @@ The project expects CommonLibF4 in the sibling directory `../commonlibf4`.
 ```powershell
 xmake f -m releasedbg
 xmake
+xmake install -o dist
 ```
+
+The packaged DLL, PDB, and INI are written beneath `dist/F4SE/Plugins`.

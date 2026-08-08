@@ -1,15 +1,7 @@
-#include "version.h"
-
 namespace
 {
 	using ActorInPowerArmor_t = bool (*)(const RE::Actor&);
-	using PlayPipboyOpenAnim_t = void (*)(RE::PipboyManager*, const RE::BSFixedString&);
-	using PlayPipboyCloseAnim_t = void (*)(RE::PipboyManager*, bool);
-	using PlayPipboyGenericOpenAnim_t = void (*)(
-		RE::PipboyManager*,
-		const RE::BSFixedString&,
-		const RE::BSFixedString&,
-		bool);
+	using ClosedownPipboy_t = void (*)(RE::PipboyManager*);
 	using PipboyMenuShouldHandleEvent_t = bool (*)(RE::BSInputEventUser*, const RE::InputEvent*);
 	using PipboyMenuOnButtonEvent_t = void (*)(RE::BSInputEventUser*, const RE::ButtonEvent*);
 	using FirstPersonStateUpdate_t = void (*)(
@@ -72,6 +64,13 @@ namespace
 		CallSite{ 1477369, 0x313, "Pip-Boy opened (keep Pip-Boy light on)"sv },
 	};
 
+	// OnPipboyCloseAnim has the only executable reference to ClosedownPipboy in
+	// 1.10.163. Hooking that validated call gives every engine-driven final close
+	// an authoritative post-close cleanup point without detouring a function prologue.
+	constexpr std::array kPipboyClosedownSites{
+		CallSite{ 592088, 0x12, "OnPipboyCloseAnim (final ClosedownPipboy)"sv },
+	};
+
 	// Every direct 1.10.163 caller of PipboyManager::PlayPipboyCloseAnim. Calls
 	// that request an animated close must be completed synchronously for our
 	// screen-only presentation: the non-PA player graph cannot produce the PA
@@ -88,8 +87,7 @@ namespace
 	};
 
 	ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
-	PlayPipboyOpenAnim_t g_playPipboyOpenAnim = nullptr;
-	PlayPipboyCloseAnim_t g_playPipboyCloseAnim = nullptr;
+	ClosedownPipboy_t g_closedownPipboy = nullptr;
 	PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
 	PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
 	FirstPersonStateUpdate_t g_firstPersonStateUpdate = nullptr;
@@ -123,7 +121,15 @@ namespace
 			static_cast<std::uint32_t>(executablePath.size()));
 
 		if (length == 0 || length >= executablePath.size()) {
-			return std::filesystem::current_path() / "Data/F4SE/Plugins/PowerArmorPipBoyUI.ini";
+			std::error_code error;
+			const auto currentPath = std::filesystem::current_path(error);
+			if (!error) {
+				return currentPath / "Data/F4SE/Plugins/PowerArmorPipBoyUI.ini";
+			}
+
+			REX::WARN(
+				"Could not resolve the executable or current directory; using a relative INI path");
+			return "Data/F4SE/Plugins/PowerArmorPipBoyUI.ini";
 		}
 
 		return std::filesystem::path(executablePath.data()).parent_path() /
@@ -278,7 +284,9 @@ namespace
 		args.loadLevel = 0;
 		args.prepareAfterLoad = true;
 		args.faceGenModel = false;
-		args.useErrorMarker = true;
+		// A marker would make Demand report a usable node and defeat the wrist-Pip-Boy
+		// fallback below when the PA screen resource is missing or corrupt.
+		args.useErrorMarker = false;
 		args.performProcess = true;
 		args.createFadeNode = true;
 		args.loadTextures = true;
@@ -333,11 +341,38 @@ namespace
 	void DetachStandalonePowerArmorPipboyGeometry()
 	{
 		auto* geometry = RE::PowerArmorGeometry::GetSingleton();
-		if (geometry && geometry->pipboyPAGlass.get() == g_powerArmorPipboyScreen.get()) {
+		if (g_powerArmorPipboyScreen && geometry &&
+			geometry->pipboyPAGlass.get() == g_powerArmorPipboyScreen.get()) {
 			g_powerArmorPipboyScreen->SetAppCulled(true);
 			geometry->pipboyPAGlass.reset();
 			REX::INFO("Detached the standalone screen after the forced Pip-Boy session");
 		}
+	}
+
+	void ResetForcedPresentation(const std::string_view a_reason)
+	{
+		const bool wasForced = g_forceThisOpen.exchange(false, std::memory_order_relaxed);
+		g_loggedFirstPersonFreeze.store(false, std::memory_order_relaxed);
+		DetachStandalonePowerArmorPipboyGeometry();
+		if (wasForced) {
+			REX::INFO("Reset forced Pip-Boy presentation ({})", a_reason);
+		}
+	}
+
+	void ClosedownPipboyAndReset(RE::PipboyManager* a_manager)
+	{
+		// Keep the forced state latched through ClosedownPipboy itself: its audio and
+		// presentation checks still need to see the PA branch. Reset only after vanilla
+		// has finished restoring menu, input, light, and deferred-action state.
+		g_closedownPipboy(a_manager);
+		ResetForcedPresentation("engine closedown"sv);
+	}
+
+	void RevealPowerArmorPipboyScreen()
+	{
+		g_powerArmorPipboyScreen->SetAppCulled(false);
+		RE::NiUpdateData updateData{};
+		g_powerArmorPipboyScreen->Update(updateData);
 	}
 
 	void DeferFirstScreenReveal()
@@ -359,14 +394,12 @@ namespace
 				auto* manager = RE::PipboyManager::GetSingleton();
 				if (g_forceThisOpen.load(std::memory_order_relaxed) && manager &&
 					manager->QPipboyActive() && g_powerArmorPipboyScreen) {
-					g_powerArmorPipboyScreen->SetAppCulled(false);
-					RE::NiUpdateData updateData{};
-					g_powerArmorPipboyScreen->Update(updateData);
+					RevealPowerArmorPipboyScreen();
 					REX::INFO("Revealed the warmed Pip-Boy screen after its setup frame");
 				}
 			});
 		} else {
-			g_powerArmorPipboyScreen->SetAppCulled(false);
+			RevealPowerArmorPipboyScreen();
 		}
 	}
 
@@ -455,13 +488,14 @@ namespace
 		// cannot be used: OnPipboyCloseAnim deliberately clears both deferred fields
 		// when it sees that event. Since the player's non-PA behavior graph cannot
 		// report the PA completion event, deliver it synchronously ourselves.
-		g_playPipboyCloseAnim(a_manager, false);
+		a_manager->PlayPipboyCloseAnim(false);
 		if (a_manager->QPipboyActive()) {
 			a_manager->OnPipboyCloseAnim();
 		}
 
-		DetachStandalonePowerArmorPipboyGeometry();
-		g_forceThisOpen.store(false, std::memory_order_relaxed);
+		// OnPipboyCloseAnim normally reaches the authoritative closedown hook. Keep
+		// this idempotent reset as a final guard if the engine returned early.
+		ResetForcedPresentation("synthetic close completion"sv);
 		REX::INFO(
 			"Completed synthetic PA close: active={} opening={} closing={} pendingItem={} pendingFastTravel={}",
 			a_manager->QPipboyActive(),
@@ -478,7 +512,7 @@ namespace
 			return;
 		}
 
-		g_playPipboyCloseAnim(a_manager, a_noAnim);
+		a_manager->PlayPipboyCloseAnim(a_noAnim);
 	}
 
 	void HandleForcedPipboyClose(
@@ -510,6 +544,8 @@ namespace
 					manager->loweringReason.underlying());
 
 				CompleteForcedPipboyClose(manager);
+				// PipboyMenu receives a const event even though Bethesda's input dispatch
+				// convention marks handled state in the engine-owned event object itself.
 				const_cast<RE::ButtonEvent*>(a_event)->handled =
 					RE::InputEvent::HANDLED_RESULT::kStop;
 				return;
@@ -548,27 +584,24 @@ namespace
 		// Fallout 4 does not need to be restarted.
 		LoadSettings();
 
-		// Reset at the beginning of the next open, never during shutdown. The close
-		// path tests ActorInPowerArmor several more times after its audio check; an
-		// early reset sends a forced open into the wrist-lowering behavior graph,
-		// whose completion event cannot arrive because the wrist was never raised.
-		g_forceThisOpen.store(false, std::memory_order_relaxed);
-		g_loggedFirstPersonFreeze.store(false, std::memory_order_relaxed);
+		// Repair any presentation state left behind by a nonstandard menu teardown
+		// before deciding how this new session should open.
+		ResetForcedPresentation("new open boundary"sv);
 
 		if (!g_forcePowerArmorPipboy) {
-			g_playPipboyOpenAnim(a_manager, a_menuName);
+			a_manager->PlayPipboyOpenAnim(a_menuName);
 			return;
 		}
 
 		const auto* player = RE::PlayerCharacter::GetSingleton();
 		if (player && g_actorInPowerArmor(*player)) {
 			// Preserve the genuine PA behavior graph and presentation unchanged.
-			g_playPipboyOpenAnim(a_manager, a_menuName);
+			a_manager->PlayPipboyOpenAnim(a_menuName);
 			return;
 		}
 
 		if (!EnsurePowerArmorPipboyGeometry()) {
-			g_playPipboyOpenAnim(a_manager, a_menuName);
+			a_manager->PlayPipboyOpenAnim(a_menuName);
 			return;
 		}
 
@@ -578,11 +611,8 @@ namespace
 		// report back; there is no code branch for power armor, the PA skeleton simply
 		// resolves it instantly. Going through the generic path with a_noAnim set skips
 		// the wait and hands straight off to OnPipboyOpenAnim.
-		static REL::Relocation<PlayPipboyGenericOpenAnim_t> playGenericOpen{
-			REL::ID(809076)
-		};
 		const RE::BSFixedString noAnimationEvent{};
-		playGenericOpen(a_manager, a_menuName, noAnimationEvent, true);
+		a_manager->PlayPipboyGenericOpenAnim(a_menuName, noAnimationEvent, true);
 		DeferFirstScreenReveal();
 
 		// The immediate generic path should establish this in OnPipboyOpened. Repair
@@ -652,6 +682,16 @@ namespace
 
 		std::vector<std::uintptr_t> lightAddresses;
 		if (!ResolveSites(kPipboyLightSites, actorInPowerArmorAddress, lightAddresses)) {
+			return false;
+		}
+
+		const auto closedownPipboyAddress = REL::ID(731410).address();
+		std::vector<std::uintptr_t> closedownAddresses;
+		closedownAddresses.reserve(kPipboyClosedownSites.size());
+		if (!ResolveSites(
+				kPipboyClosedownSites,
+				closedownPipboyAddress,
+				closedownAddresses)) {
 			return false;
 		}
 
@@ -726,14 +766,15 @@ namespace
 			trampoline.write_call<5>(address, UsePowerArmorPipboyLight);
 		}
 
-		g_playPipboyOpenAnim = reinterpret_cast<PlayPipboyOpenAnim_t>(
-			trampoline.write_call<5>(tabHandlerCall, OpenPipboyWithoutWristAnimation));
+		trampoline.write_call<5>(tabHandlerCall, OpenPipboyWithoutWristAnimation);
 		trampoline.write_call<5>(companionUseItemCall, OpenPipboyWithoutWristAnimation);
 
-		g_playPipboyCloseAnim = reinterpret_cast<PlayPipboyCloseAnim_t>(playPipboyCloseAnimAddress);
 		for (const auto address : pipboyCloseCalls) {
 			trampoline.write_call<5>(address, PlayPipboyCloseForForcedPresentation);
 		}
+
+		g_closedownPipboy = reinterpret_cast<ClosedownPipboy_t>(
+			trampoline.write_call<5>(closedownAddresses.front(), ClosedownPipboyAndReset));
 
 		g_pipboyMenuShouldHandleEvent = reinterpret_cast<PipboyMenuShouldHandleEvent_t>(
 			pipboyMenuInputVtable.write_vfunc(shouldHandleEventIndex, ShouldHandleForcedPipboyClose));
@@ -745,7 +786,7 @@ namespace
 				UpdateFirstPersonCameraForForcedPresentation));
 
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, {} close overrides, the forced-close input fallback, and the first-person camera freeze",
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} close overrides, authoritative closedown cleanup, the forced-close input fallback, and the first-person camera freeze",
 			presentationAddresses.size(),
 			pipboyCloseCalls.size());
 		return true;
@@ -753,11 +794,23 @@ namespace
 
 	void OnF4SEMessage(F4SE::MessagingInterface::Message* a_message)
 	{
-		if (!g_forcePowerArmorPipboy) {
+		if (a_message->type == F4SE::MessagingInterface::kPreLoadGame) {
+			ResetForcedPresentation("pre-load game"sv);
 			return;
 		}
 
-		if (a_message->type == F4SE::MessagingInterface::kGameDataReady && a_message->data) {
+		if (a_message->type == F4SE::MessagingInterface::kGameDataReady) {
+			if (!a_message->data) {
+				ResetForcedPresentation("game data unloaded"sv);
+				g_powerArmorPipboyScreen.reset();
+				REX::INFO("Released the standalone Pip-Boy screen before game-data teardown");
+				return;
+			}
+
+			if (!g_forcePowerArmorPipboy) {
+				return;
+			}
+
 			// The resource database is ready here, but PowerArmorGeometry is not created
 			// until the playable game/HUD exists. Warm only the NIF at this stage.
 			(void)LoadPowerArmorPipboyScreen();
@@ -766,7 +819,14 @@ namespace
 
 		if (a_message->type == F4SE::MessagingInterface::kPostLoadGame ||
 			a_message->type == F4SE::MessagingInterface::kNewGame) {
+			ResetForcedPresentation(
+				a_message->type == F4SE::MessagingInterface::kPostLoadGame ?
+					"post-load game"sv :
+					"new game"sv);
 			g_deferNextScreenReveal.store(true, std::memory_order_relaxed);
+			if (!g_forcePowerArmorPipboy) {
+				return;
+			}
 			// Do not occupy PowerArmorGeometry::pipboyPAGlass outside a forced menu
 			// session. The genuine PA preload owns that slot. The NIF itself is already
 			// cached; first-frame conceal/reveal handles render-target initialization.
@@ -808,13 +868,15 @@ extern "C"
 {
 	F4SE_EXPORT bool F4SEPlugin_Query(const F4SE::QueryInterface* a_f4se, F4SE::PluginInfo* a_info)
 	{
-		a_info->name = Version::PROJECT.data();
-		a_info->infoVersion = F4SE::PluginInfo::kVersion;
-		a_info->version = Version::MAJOR;
-
-		if (a_f4se->IsEditor()) {
+		if (!a_info) {
 			return false;
 		}
-		return true;
+
+		const auto* version = F4SE::PluginVersionData::GetSingleton();
+		a_info->name = version ? version->GetPluginName().data() : "PowerArmorPipBoyUI";
+		a_info->infoVersion = F4SE::PluginInfo::kVersion;
+		a_info->version = version ? version->GetPluginVersion().pack() : 1;
+
+		return !a_f4se->IsEditor();
 	}
 }
