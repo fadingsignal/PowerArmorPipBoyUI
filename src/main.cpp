@@ -86,6 +86,14 @@ namespace
 		0xE1D205,
 	};
 
+	// The two 1.10.163 calls that request an animated holotape load. A third direct
+	// reference at 0xB90BD2 is already the engine's a_noAnim=true tail-call and does
+	// not need interception. Forced presentation uses that same native path.
+	constexpr std::array kPipboyLoadHolotapeCallOffsets{
+		0xB90BFE,
+		0xF49F3D,
+	};
+
 	ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
 	ClosedownPipboy_t g_closedownPipboy = nullptr;
 	PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
@@ -439,9 +447,25 @@ namespace
 		       buttonEvent->GetBSButtonCode() == RE::BS_BUTTON_CODE::kTab;
 	}
 
+	[[nodiscard]] bool IsNestedPipboyPresentationOpen()
+	{
+		const auto* ui = RE::UI::GetSingleton();
+		if (!ui) {
+			return false;
+		}
+
+		if (ui->GetMenuOpen<RE::PipboyHolotapeMenu>()) {
+			return true;
+		}
+
+		const auto pipboyMenu = ui->GetMenu<RE::PipboyMenu>();
+		return pipboyMenu &&
+		       (pipboyMenu->showingModalMessage || pipboyMenu->pipboyHiddenByAnotherMenu);
+	}
+
 	[[nodiscard]] bool IsForcedPipboyCloseEvent(const RE::InputEvent* a_event)
 	{
-		if (!IsForcedPipboyToggleEvent(a_event)) {
+		if (!IsForcedPipboyToggleEvent(a_event) || IsNestedPipboyPresentationOpen()) {
 			return false;
 		}
 
@@ -464,7 +488,7 @@ namespace
 		// PipboyMenu normally rejects every event while any PipboyManager transition
 		// flag is set. Always admit the toggle button for our immediate presentation
 		// so it can reach the native close fallback below.
-		return IsForcedPipboyToggleEvent(a_event) ||
+		return (IsForcedPipboyToggleEvent(a_event) && !IsNestedPipboyPresentationOpen()) ||
 		       g_pipboyMenuShouldHandleEvent(a_inputUser, a_event);
 	}
 
@@ -513,6 +537,20 @@ namespace
 		}
 
 		a_manager->PlayPipboyCloseAnim(a_noAnim);
+	}
+
+	void PlayPipboyLoadHolotapeForForcedPresentation(
+		RE::PipboyManager* a_manager,
+		RE::BGSNote* a_holotape,
+		const bool a_noAnim)
+	{
+		const bool forceNoAnimation =
+			g_forceThisOpen.load(std::memory_order_relaxed) && !a_noAnim;
+		if (forceNoAnimation) {
+			REX::INFO("Using the native no-animation path for a forced holotape load");
+		}
+
+		a_manager->PlayPipboyLoadHolotapeAnim(a_holotape, a_noAnim || forceNoAnimation);
 	}
 
 	void HandleForcedPipboyClose(
@@ -701,6 +739,7 @@ namespace
 		const auto companionUseItemCall = REL::Offset(0x9FC974).address();
 		const auto playPipboyOpenAnimAddress = REL::ID(663900).address();
 		const auto playPipboyCloseAnimAddress = REL::ID(273927).address();
+		const auto playPipboyLoadHolotapeAnimAddress = REL::ID(477096).address();
 		if (*reinterpret_cast<const std::uint8_t*>(tabHandlerCall) != 0xE8 ||
 			GetCallTarget(tabHandlerCall) != playPipboyOpenAnimAddress) {
 			REX::ERROR("Unexpected Tab-handler call at 0x{:X}; refusing to patch", tabHandlerCall);
@@ -722,6 +761,20 @@ namespace
 				return false;
 			}
 			pipboyCloseCalls.push_back(address);
+		}
+
+		std::vector<std::uintptr_t> pipboyLoadHolotapeCalls;
+		pipboyLoadHolotapeCalls.reserve(kPipboyLoadHolotapeCallOffsets.size());
+		for (const auto offset : kPipboyLoadHolotapeCallOffsets) {
+			const auto address = REL::Offset(offset).address();
+			if (*reinterpret_cast<const std::uint8_t*>(address) != 0xE8 ||
+				GetCallTarget(address) != playPipboyLoadHolotapeAnimAddress) {
+				REX::ERROR(
+					"Unexpected PlayPipboyLoadHolotapeAnim call at 0x{:X}; refusing to patch",
+					address);
+				return false;
+			}
+			pipboyLoadHolotapeCalls.push_back(address);
 		}
 
 		// PipboyMenu's secondary BSInputEventUser vtable. Hook the two input methods
@@ -772,6 +825,9 @@ namespace
 		for (const auto address : pipboyCloseCalls) {
 			trampoline.write_call<5>(address, PlayPipboyCloseForForcedPresentation);
 		}
+		for (const auto address : pipboyLoadHolotapeCalls) {
+			trampoline.write_call<5>(address, PlayPipboyLoadHolotapeForForcedPresentation);
+		}
 
 		g_closedownPipboy = reinterpret_cast<ClosedownPipboy_t>(
 			trampoline.write_call<5>(closedownAddresses.front(), ClosedownPipboyAndReset));
@@ -786,8 +842,9 @@ namespace
 				UpdateFirstPersonCameraForForcedPresentation));
 
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, {} close overrides, authoritative closedown cleanup, the forced-close input fallback, and the first-person camera freeze",
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, and the first-person camera freeze",
 			presentationAddresses.size(),
+			pipboyLoadHolotapeCalls.size(),
 			pipboyCloseCalls.size());
 		return true;
 	}
