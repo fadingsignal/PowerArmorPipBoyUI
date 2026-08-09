@@ -13,10 +13,175 @@ namespace PowerArmorPipBoyUI::Presentation
 			const bool*);
 
 		RE::NiPointer<RE::NiNode> g_powerArmorPipboyScreen;
+		RE::NiPointer<RE::NiNode> g_displacedPowerArmorPipboyScreen;
 		std::atomic_bool g_forceThisOpen = false;
 		std::atomic_bool g_loggedFirstPersonFreeze = false;
 		std::atomic_bool g_deferNextScreenReveal = true;
 		std::atomic_bool g_ownsPowerArmorPipboyGlass = false;
+
+		struct ShaderState
+		{
+			RE::BSShaderProperty* property;
+			RE::BSShaderMaterial* material;
+		};
+
+		[[nodiscard]] std::vector<ShaderState> CollectShaderStates(RE::NiAVObject* a_root)
+		{
+			std::vector<ShaderState> states;
+			RE::BSVisit::TraverseScenegraphGeometries(
+				a_root,
+				[&states](RE::BSGeometry* a_geometry) {
+					for (const auto& property : a_geometry->properties) {
+						auto* shader = netimmerse_cast<RE::BSShaderProperty*>(property.get());
+						if (!shader) {
+							continue;
+						}
+
+						bool alreadyRecorded = false;
+						for (const auto& state : states) {
+							if (state.property == shader) {
+								alreadyRecorded = true;
+								break;
+							}
+						}
+						if (!alreadyRecorded) {
+							states.push_back({ shader, shader->material });
+						}
+					}
+					return RE::BSVisitControl::kContinue;
+				});
+			return states;
+		}
+
+		[[nodiscard]] bool IsSourceProperty(
+			const RE::BSShaderProperty* a_property,
+			const std::span<const ShaderState> a_sourceStates)
+		{
+			for (const auto& state : a_sourceStates) {
+				if (state.property == a_property) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		[[nodiscard]] bool IsSourceMaterial(
+			const RE::BSShaderMaterial* a_material,
+			const std::span<const ShaderState> a_sourceStates)
+		{
+			for (const auto& state : a_sourceStates) {
+				if (state.material && state.material == a_material) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		[[nodiscard]] bool IsolateShaderMaterials(
+			RE::NiNode& a_clone,
+			const std::span<const ShaderState> a_sourceStates)
+		{
+			auto cloneStates = CollectShaderStates(std::addressof(a_clone));
+			if (cloneStates.empty() || cloneStates.size() != a_sourceStates.size()) {
+				REX::ERROR(
+					"PADashPipboyScreen clone has an unexpected shader-property count "
+					"(source {}, clone {})",
+					a_sourceStates.size(),
+					cloneStates.size());
+				return false;
+			}
+
+			// A cloned scene graph is not isolated if any geometry still points at a
+			// shader property owned by the cached source. Check before mutating anything.
+			for (const auto& state : cloneStates) {
+				if (IsSourceProperty(state.property, a_sourceStates)) {
+					REX::ERROR(
+						"PADashPipboyScreen clone retained source shader property {:p}",
+						static_cast<const void*>(state.property));
+					return false;
+				}
+			}
+
+			for (std::size_t index = 0; index < cloneStates.size(); ++index) {
+				auto& state = cloneStates[index];
+				if (!state.material) {
+					REX::ERROR(
+						"PADashPipboyScreen clone shader property {} has no material",
+						index);
+					return false;
+				}
+
+				const auto* materialBefore = state.material;
+				// The true flag asks the engine to install a unique copy of the supplied
+				// material instead of retaining a shared material-database instance.
+				state.property->SetMaterial(state.material, true);
+				state.material = state.property->material;
+
+				DiagnosticLog(
+					"Isolated PA screen shader {}: sourceProperty={:p} cloneProperty={:p} "
+					"sourceMaterial={:p} materialBefore={:p} materialAfter={:p}",
+					index,
+					static_cast<const void*>(a_sourceStates[index].property),
+					static_cast<const void*>(state.property),
+					static_cast<const void*>(a_sourceStates[index].material),
+					static_cast<const void*>(materialBefore),
+					static_cast<const void*>(state.material));
+
+				if (!state.material || IsSourceMaterial(state.material, a_sourceStates)) {
+					REX::ERROR(
+						"PADashPipboyScreen clone shader {} did not receive a unique material",
+						index);
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		[[nodiscard]] RE::NiPointer<RE::NiNode> ClonePowerArmorPipboyScreen(
+			RE::NiNode& a_source)
+		{
+			const auto sourceStates = CollectShaderStates(std::addressof(a_source));
+			if (sourceStates.empty()) {
+				REX::ERROR("PADashPipboyScreen source has no shader property");
+				return nullptr;
+			}
+
+			RE::NiCloningProcess cloning{};
+			// CopyType controls NiObjectNET copy/name behavior; material uniqueness is
+			// established explicitly below.
+			cloning.copyType = RE::NiCloningProcess::CopyType::kCopyExact;
+			cloning.appendChar = '\0';
+			cloning.scale = { 1.0F, 1.0F, 1.0F };
+
+			RE::NiPointer<RE::NiObject> clonedObject{ a_source.CreateClone(cloning) };
+			if (!clonedObject) {
+				REX::ERROR("Could not create a PADashPipboyScreen scene-graph clone");
+				return nullptr;
+			}
+
+			// Resolve cloned cross-references after every object has been entered in the
+			// clone map. Bethesda's cloning flow invokes this on the source graph.
+			a_source.ProcessClone(cloning);
+
+			auto* cloneNode = clonedObject->IsNode();
+			if (!cloneNode) {
+				REX::ERROR("PADashPipboyScreen clone is not an NiNode");
+				return nullptr;
+			}
+
+			RE::NiPointer<RE::NiNode> clone{ cloneNode };
+			if (!IsolateShaderMaterials(*clone, sourceStates)) {
+				return nullptr;
+			}
+
+			DiagnosticLog(
+				"Cloned PADashPipboyScreen source={:p} clone={:p} shaderProperties={}",
+				static_cast<const void*>(std::addressof(a_source)),
+				static_cast<const void*>(clone.get()),
+				sourceStates.size());
+			return clone;
+		}
 
 		bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
 		{
@@ -31,35 +196,73 @@ namespace PowerArmorPipBoyUI::Presentation
 		// it together with the dashboard and rain geometry after a PreloadPowerArmor event.
 		// Loading just the quad avoids invoking that subsystem's completion callback out of
 		// sequence and avoids creating any of the PowerArmorHUDMenu geometry.
-		[[nodiscard]] bool LoadPowerArmorPipboyScreen()
+		[[nodiscard]] RE::BSModelDB::DBTraits::ArgsType MakePowerArmorPipboyScreenLoadArgs()
 		{
-			if (g_powerArmorPipboyScreen) {
-				return true;
-			}
-
 			RE::BSModelDB::DBTraits::ArgsType args{};
 			args.lodFadeMult = RE::ENUM_LOD_MULT::kNone;
 			args.loadLevel = 0;
 			args.prepareAfterLoad = true;
 			args.faceGenModel = false;
 			// A marker would make Demand report a usable node and defeat the wrist-Pip-Boy
-			// fallback below when the PA screen resource is missing or corrupt.
+			// fallback when the PA screen resource is missing or corrupt.
 			args.useErrorMarker = false;
 			args.performProcess = true;
 			args.createFadeNode = true;
 			args.loadTextures = true;
+			return args;
+		}
 
-			const auto result = RE::BSModelDB::Demand(
+		[[nodiscard]] RE::BSResource::ErrorCode DemandPowerArmorPipboyScreen(
+			RE::NiPointer<RE::NiNode>& a_result)
+		{
+			const auto args = MakePowerArmorPipboyScreenLoadArgs();
+			return RE::BSModelDB::Demand(
 				"Interface/Objects/PADashPipboyScreen.nif",
-				std::addressof(g_powerArmorPipboyScreen),
+				std::addressof(a_result),
 				args);
-			if (result != RE::BSResource::ErrorCode::kNone || !g_powerArmorPipboyScreen) {
+		}
+
+		void PrewarmPowerArmorPipboyScreenSource()
+		{
+			RE::NiPointer<RE::NiNode> demandedSource;
+			const auto result = DemandPowerArmorPipboyScreen(demandedSource);
+			if (result != RE::BSResource::ErrorCode::kNone || !demandedSource) {
+				REX::ERROR(
+					"Could not prewarm PADashPipboyScreen.nif (BSResource error {})",
+					std::to_underlying(result));
+				return;
+			}
+
+			DiagnosticLog(
+				"Prewarmed PADashPipboyScreen source {:p} without retaining a plugin clone",
+				static_cast<const void*>(demandedSource.get()));
+		}
+
+		[[nodiscard]] bool LoadPowerArmorPipboyScreen()
+		{
+			if (g_powerArmorPipboyScreen) {
+				return true;
+			}
+
+			RE::NiPointer<RE::NiNode> demandedSource;
+			const auto result = DemandPowerArmorPipboyScreen(demandedSource);
+			if (result != RE::BSResource::ErrorCode::kNone || !demandedSource) {
 				REX::ERROR(
 					"Could not load PADashPipboyScreen.nif (BSResource error {})",
 					std::to_underlying(result));
-				g_powerArmorPipboyScreen.reset();
 				return false;
 			}
+
+			g_powerArmorPipboyScreen = ClonePowerArmorPipboyScreen(*demandedSource);
+			if (!g_powerArmorPipboyScreen) {
+				REX::ERROR(
+					"Could not isolate PADashPipboyScreen geometry; keeping the wrist Pip-Boy");
+				demandedSource.reset();
+				return false;
+			}
+			// Do not retain the model-database source. Vanilla may demand that cached
+			// object later for genuine power-armor presentation.
+			demandedSource.reset();
 
 			// These are the exact local-space values applied by
 			// PowerArmorGeometry::BackgroundTaskFinishedLoading in 1.10.163.
@@ -70,8 +273,12 @@ namespace PowerArmorPipBoyUI::Presentation
 			// its screen-attached surface. PowerArmorGeometry::ShowPipboyPAGeometry will
 			// unhide it during open; the first open is reculled for one setup frame below.
 			g_powerArmorPipboyScreen->SetAppCulled(true);
+			// Every forced session owns a fresh clone. Give each one a setup frame before
+			// reveal rather than relying on state warmed by a previous clone.
+			g_deferNextScreenReveal.store(true, std::memory_order_relaxed);
 
-			DiagnosticLog("Loaded PADashPipboyScreen.nif without the Power Armor dashboard");
+			DiagnosticLog(
+				"Loaded an isolated PADashPipboyScreen clone without the Power Armor dashboard");
 			return true;
 		}
 
@@ -84,16 +291,19 @@ namespace PowerArmorPipBoyUI::Presentation
 			auto* geometry = RE::PowerArmorGeometry::GetSingleton();
 			if (!geometry) {
 				REX::ERROR("PowerArmorGeometry is not available; keeping the wrist Pip-Boy");
+				g_powerArmorPipboyScreen.reset();
 				return false;
 			}
 
-			if (geometry->pipboyPAGlass) {
-				return true;
-			}
-
+			// Vanilla can retain its genuine PA screen in this slot after PA use. Keep a
+			// strong reference and restore that exact value when the forced session ends.
+			g_displacedPowerArmorPipboyScreen = geometry->pipboyPAGlass;
 			geometry->pipboyPAGlass = g_powerArmorPipboyScreen;
 			g_ownsPowerArmorPipboyGlass.store(true, std::memory_order_relaxed);
-			DiagnosticLog("Attached the standalone screen to PowerArmorGeometry::pipboyPAGlass");
+			DiagnosticLog(
+				"Attached standalone screen {:p}; preserved vanilla geometry {:p}",
+				static_cast<const void*>(g_powerArmorPipboyScreen.get()),
+				static_cast<const void*>(g_displacedPowerArmorPipboyScreen.get()));
 			return true;
 		}
 
@@ -110,11 +320,14 @@ namespace PowerArmorPipBoyUI::Presentation
 			if (g_powerArmorPipboyScreen && geometry &&
 				geometry->pipboyPAGlass.get() == g_powerArmorPipboyScreen.get()) {
 				g_powerArmorPipboyScreen->SetAppCulled(true);
-				geometry->pipboyPAGlass.reset();
-				DiagnosticLog("Detached the standalone screen after the forced Pip-Boy session");
+				geometry->pipboyPAGlass = g_displacedPowerArmorPipboyScreen;
+				DiagnosticLog(
+					"Detached standalone screen and restored vanilla geometry {:p}",
+					static_cast<const void*>(g_displacedPowerArmorPipboyScreen.get()));
 			} else {
 				DiagnosticLog("Released standalone-screen ownership after vanilla replaced the geometry");
 			}
+			g_displacedPowerArmorPipboyScreen.reset();
 		}
 
 		void ResetForcedPresentation(const std::string_view a_reason)
@@ -122,6 +335,12 @@ namespace PowerArmorPipBoyUI::Presentation
 			const bool wasForced = g_forceThisOpen.exchange(false, std::memory_order_relaxed);
 			g_loggedFirstPersonFreeze.store(false, std::memory_order_relaxed);
 			DetachStandalonePowerArmorPipboyGeometry();
+			if (g_powerArmorPipboyScreen) {
+				DiagnosticLog(
+					"Released session-owned standalone screen {:p}",
+					static_cast<const void*>(g_powerArmorPipboyScreen.get()));
+				g_powerArmorPipboyScreen.reset();
+			}
 			if (wasForced) {
 				DiagnosticLog("Reset forced Pip-Boy presentation ({})", a_reason);
 			}
@@ -402,6 +621,12 @@ namespace PowerArmorPipBoyUI::Presentation
 		const bool playerInPowerArmor = player && Hooks::ActorInPowerArmor(*player);
 		DiagnosticLog("Pip-Boy open classified as genuine power armor: {}", playerInPowerArmor);
 		if (playerInPowerArmor) {
+			const auto* geometry = RE::PowerArmorGeometry::GetSingleton();
+			DiagnosticLog(
+				"Genuine PA geometry identity: pipboyPAGlass={:p} pluginClone={:p} ownsSlot={}",
+				static_cast<const void*>(geometry ? geometry->pipboyPAGlass.get() : nullptr),
+				static_cast<const void*>(g_powerArmorPipboyScreen.get()),
+				g_ownsPowerArmorPipboyGlass.load(std::memory_order_relaxed));
 			// Preserve the genuine PA behavior graph and presentation unchanged.
 			a_manager->PlayPipboyOpenAnim(a_menuName);
 			return;
@@ -442,8 +667,7 @@ namespace PowerArmorPipBoyUI::Presentation
 		if (a_message->type == F4SE::MessagingInterface::kGameDataReady) {
 			if (!a_message->data) {
 				ResetForcedPresentation("game data unloaded"sv);
-				g_powerArmorPipboyScreen.reset();
-				DiagnosticLog("Released the standalone Pip-Boy screen before game-data teardown");
+				DiagnosticLog("Released forced presentation state before game-data teardown");
 				return;
 			}
 
@@ -451,9 +675,9 @@ namespace PowerArmorPipBoyUI::Presentation
 				return;
 			}
 
-			// The resource database is ready here, but PowerArmorGeometry is not created
-			// until the playable game/HUD exists. Warm only the NIF at this stage.
-			(void)LoadPowerArmorPipboyScreen();
+			// Demand only the cached source. Retaining even an unattached clone changes the
+			// genuine-PA transition fallback from gray to black, so clones are session-owned.
+			PrewarmPowerArmorPipboyScreenSource();
 			return;
 		}
 
@@ -467,10 +691,9 @@ namespace PowerArmorPipBoyUI::Presentation
 			if (!Settings::ForcePowerArmorPipboy()) {
 				return;
 			}
-			// Do not occupy PowerArmorGeometry::pipboyPAGlass outside a forced menu
-			// session. The genuine PA preload owns that slot. The NIF itself is already
-			// cached; first-frame conceal/reveal handles render-target initialization.
-			(void)LoadPowerArmorPipboyScreen();
+			// Keep only the source/model cache warm. A fresh isolated clone is created on
+			// the next forced open and released as soon as that session closes.
+			PrewarmPowerArmorPipboyScreenSource();
 		}
 	}
 }
