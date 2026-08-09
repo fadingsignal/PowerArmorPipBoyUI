@@ -2,6 +2,7 @@
 
 #include "Diagnostics.h"
 #include "Hooks.h"
+#include "RainOverlay.h"
 #include "Settings.h"
 
 namespace PowerArmorPipBoyUI::Presentation
@@ -792,6 +793,8 @@ namespace PowerArmorPipBoyUI::Presentation
 
 	void OnF4SEMessage(F4SE::MessagingInterface::Message* a_message)
 	{
+		RainOverlay::OnF4SEMessage(a_message);
+
 		if (a_message->type == F4SE::MessagingInterface::kPreLoadGame) {
 			ResetForcedPresentation("pre-load game"sv);
 			return;

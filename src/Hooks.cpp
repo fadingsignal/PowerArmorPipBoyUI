@@ -1,6 +1,7 @@
 #include "Hooks.h"
 
 #include "Presentation.h"
+#include "RainOverlay.h"
 #include "Runtime.h"
 
 namespace PowerArmorPipBoyUI::Hooks
@@ -19,6 +20,13 @@ namespace PowerArmorPipBoyUI::Hooks
 			RE::TESCameraState*,
 			RE::BSTSmartPointer<RE::TESCameraState>&);
 		using PipboyMenuAdvanceMovie_t = void (*)(RE::IMenu*, float, std::uint64_t);
+		using GetPowerArmorHUDRainModifier_t = RE::TESImageSpaceModifier* (*)();
+		using ReferenceIsInterior_t = bool (*)(const RE::TESObjectREFR*);
+		using GetSubmergeLevel_t = float (*)(
+			const RE::TESObjectREFR*,
+			const RE::NiPoint3*,
+			RE::TESObjectCELL*,
+			bool);
 
 		ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
 		ClosedownPipboy_t g_closedownPipboy = nullptr;
@@ -26,6 +34,10 @@ namespace PowerArmorPipBoyUI::Hooks
 		PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
 		FirstPersonStateUpdate_t g_firstPersonStateUpdate = nullptr;
 		PipboyMenuAdvanceMovie_t g_pipboyMenuAdvanceMovie = nullptr;
+		PipboyMenuAdvanceMovie_t g_hudMenuAdvanceMovie = nullptr;
+		GetPowerArmorHUDRainModifier_t g_getPowerArmorHUDRainModifier = nullptr;
+		ReferenceIsInterior_t g_referenceIsInterior = nullptr;
+		GetSubmergeLevel_t g_getSubmergeLevel = nullptr;
 	}
 
 	bool Install()
@@ -37,6 +49,13 @@ namespace PowerArmorPipBoyUI::Hooks
 
 		g_actorInPowerArmor = reinterpret_cast<ActorInPowerArmor_t>(
 			addresses->actorInPowerArmor);
+		g_getPowerArmorHUDRainModifier =
+			reinterpret_cast<GetPowerArmorHUDRainModifier_t>(
+				addresses->powerArmorHUDRainModifierGetter);
+		g_referenceIsInterior = reinterpret_cast<ReferenceIsInterior_t>(
+			addresses->referenceIsInterior);
+		g_getSubmergeLevel = reinterpret_cast<GetSubmergeLevel_t>(
+			addresses->getSubmergeLevel);
 
 		auto& trampoline = REL::GetTrampoline();
 		for (const auto address : addresses->presentation) {
@@ -104,8 +123,14 @@ namespace PowerArmorPipBoyUI::Hooks
 				0x04,
 				Presentation::AdvancePipboyMenuForTerminalReturn));
 
+		REL::Relocation<std::uintptr_t> hudMenuVtable{ addresses->hudMenuVtable };
+		g_hudMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
+			hudMenuVtable.write_vfunc(
+				Runtime::kHUDMenuAdvanceMovieIndex,
+				RainOverlay::AdvanceHUDMenu));
+
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, the first-person camera freeze, and the PipboyMenu frame handoff",
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, the first-person camera freeze, the PipboyMenu frame handoff, and the HUD rain frame handoff",
 			addresses->presentation.size(),
 			addresses->pipboyLoadHolotapeCalls.size(),
 			addresses->pipboyCloseCalls.size());
@@ -149,5 +174,32 @@ namespace PowerArmorPipBoyUI::Hooks
 		const std::uint64_t a_time)
 	{
 		g_pipboyMenuAdvanceMovie(a_menu, a_timeDelta, a_time);
+	}
+
+	void HUDMenuAdvanceMovie(
+		RE::IMenu* a_menu,
+		const float a_timeDelta,
+		const std::uint64_t a_time)
+	{
+		g_hudMenuAdvanceMovie(a_menu, a_timeDelta, a_time);
+	}
+
+	RE::TESImageSpaceModifier* GetPowerArmorHUDRainModifier()
+	{
+		return g_getPowerArmorHUDRainModifier();
+	}
+
+	bool ReferenceIsInterior(const RE::TESObjectREFR& a_reference)
+	{
+		return g_referenceIsInterior(std::addressof(a_reference));
+	}
+
+	float GetSubmergeLevel(const RE::TESObjectREFR& a_reference)
+	{
+		return g_getSubmergeLevel(
+			std::addressof(a_reference),
+			std::addressof(a_reference.data.location),
+			a_reference.parentCell,
+			false);
 	}
 }

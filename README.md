@@ -55,6 +55,7 @@ Install `PowerArmorPipBoyUI.ini` beside the DLL in `Data/F4SE/Plugins`:
 bForcePowerArmorPipboy=1
 bPowerArmorAudio=1
 bKeepPipboyLightOn=1
+bRainOverlayOutsidePowerArmor=0
 bUsePipboyEffectColor=0
 bEnableDebugLogging=0
 ```
@@ -63,6 +64,13 @@ Settings are reloaded whenever the Pip-Boy opens and before a forced close, so
 editing the INI does not require restarting Fallout 4. Presentation changes take
 effect on the next open; an audio change made while the menu is open can affect
 its close sound.
+
+Set `bRainOverlayOutsidePowerArmor` to `1` to show Fallout 4's vanilla
+Power Armor rain-on-glass effect while outside Power Armor. The plugin uses an
+independently loaded instance of the native wet-armor geometry and temporarily leases the
+vanilla `HUDRainRenderer`; genuine Power Armor retains ownership of its normal
+effect. Weather transitions, interiors, submersion, and both first- and
+third-person cameras follow the native behavior.
 
 Set `bUsePipboyEffectColor` to `1` to use the player's
 `fPipboyEffectColorR/G/B` values from `Fallout4Prefs.ini` in place of the Power

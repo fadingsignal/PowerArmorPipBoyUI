@@ -19,4 +19,12 @@ namespace PowerArmorPipBoyUI::Hooks
 		RE::IMenu* a_menu,
 		float a_timeDelta,
 		std::uint64_t a_time);
+	void HUDMenuAdvanceMovie(
+		RE::IMenu* a_menu,
+		float a_timeDelta,
+		std::uint64_t a_time);
+
+	[[nodiscard]] RE::TESImageSpaceModifier* GetPowerArmorHUDRainModifier();
+	[[nodiscard]] bool ReferenceIsInterior(const RE::TESObjectREFR& a_reference);
+	[[nodiscard]] float GetSubmergeLevel(const RE::TESObjectREFR& a_reference);
 }

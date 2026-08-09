@@ -7,5 +7,6 @@ namespace PowerArmorPipBoyUI::Settings
 	[[nodiscard]] bool ForcePowerArmorPipboy() noexcept;
 	[[nodiscard]] bool PowerArmorAudio() noexcept;
 	[[nodiscard]] bool KeepPipboyLightOn() noexcept;
+	[[nodiscard]] bool RainOverlayOutsidePowerArmor() noexcept;
 	[[nodiscard]] bool DebugLoggingEnabled() noexcept;
 }

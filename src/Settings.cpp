@@ -9,6 +9,7 @@ namespace PowerArmorPipBoyUI::Settings
 		bool g_forcePowerArmorPipboy = true;
 		bool g_powerArmorAudio = true;
 		bool g_keepPipboyLightOn = true;
+		bool g_rainOverlayOutsidePowerArmor = false;
 		bool g_usePipboyEffectColor = false;
 		bool g_enableDebugLogging = false;
 		bool g_savedPowerArmorEffectColor = false;
@@ -156,6 +157,10 @@ namespace PowerArmorPipBoyUI::Settings
 			const bool forcePowerArmorPipboy = GetSetting(iniPath, L"bForcePowerArmorPipboy", true);
 			const bool powerArmorAudio = GetSetting(iniPath, L"bPowerArmorAudio", true);
 			const bool keepPipboyLightOn = GetSetting(iniPath, L"bKeepPipboyLightOn", true);
+			const bool rainOverlayOutsidePowerArmor = GetSetting(
+				iniPath,
+				L"bRainOverlayOutsidePowerArmor",
+				false);
 			const bool usePipboyEffectColor = GetSetting(iniPath, L"bUsePipboyEffectColor", false);
 			const bool enableDebugLogging = GetSetting(iniPath, L"bEnableDebugLogging", false);
 
@@ -164,22 +169,25 @@ namespace PowerArmorPipBoyUI::Settings
 				forcePowerArmorPipboy != g_forcePowerArmorPipboy ||
 				powerArmorAudio != g_powerArmorAudio ||
 				keepPipboyLightOn != g_keepPipboyLightOn ||
+				rainOverlayOutsidePowerArmor != g_rainOverlayOutsidePowerArmor ||
 				usePipboyEffectColor != g_usePipboyEffectColor ||
 				enableDebugLogging != g_enableDebugLogging;
 
 			g_forcePowerArmorPipboy = forcePowerArmorPipboy;
 			g_powerArmorAudio = powerArmorAudio;
 			g_keepPipboyLightOn = keepPipboyLightOn;
+			g_rainOverlayOutsidePowerArmor = rainOverlayOutsidePowerArmor;
 			g_usePipboyEffectColor = usePipboyEffectColor;
 			g_enableDebugLogging = enableDebugLogging;
 			ApplyPipboyEffectColor();
 
 			if (g_enableDebugLogging && (firstLoad || changed)) {
 				DiagnosticLog(
-					"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bUsePipboyEffectColor={} bEnableDebugLogging={} ({})",
+					"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bRainOverlayOutsidePowerArmor={} bUsePipboyEffectColor={} bEnableDebugLogging={} ({})",
 					g_forcePowerArmorPipboy,
 					g_powerArmorAudio,
 					g_keepPipboyLightOn,
+					g_rainOverlayOutsidePowerArmor,
 					g_usePipboyEffectColor,
 					g_enableDebugLogging,
 					iniPath.string());
@@ -214,6 +222,11 @@ namespace PowerArmorPipBoyUI::Settings
 	bool KeepPipboyLightOn() noexcept
 	{
 		return g_keepPipboyLightOn;
+	}
+
+	bool RainOverlayOutsidePowerArmor() noexcept
+	{
+		return g_rainOverlayOutsidePowerArmor;
 	}
 
 	bool DebugLoggingEnabled() noexcept
