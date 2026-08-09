@@ -223,6 +223,24 @@ namespace PowerArmorPipBoyUI::Runtime
 			return std::nullopt;
 		}
 
+		// HUDMenu owns the persistent gameplay-frame update that advances
+		// PowerArmorGeometry even while its dashboard is hidden. Hooking its
+		// Address Library-backed vtable gives the rain feature a stable frame/time
+		// boundary without another function-internal call-site offset.
+		addresses.hudMenuVtable = RE::HUDMenu::VTABLE[0].address();
+		const auto* hudMenuEntries = reinterpret_cast<const std::uintptr_t*>(
+			addresses.hudMenuVtable);
+		if (hudMenuEntries[kHUDMenuAdvanceMovieIndex] != REL::ID(494688).address()) {
+			REX::ERROR("Unexpected HUDMenu vtable; refusing to patch");
+			return std::nullopt;
+		}
+
+		// These three complete native helpers keep the rain eligibility and IMOD
+		// semantics identical to 1.10.163 without initializing PowerArmorGeometry.
+		addresses.powerArmorHUDRainModifierGetter = REL::ID(547006).address();
+		addresses.referenceIsInterior = REL::ID(1108031).address();
+		addresses.getSubmergeLevel = REL::ID(44316).address();
+
 		return addresses;
 	}
 }

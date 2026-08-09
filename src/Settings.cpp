@@ -9,6 +9,7 @@ namespace PowerArmorPipBoyUI::Settings
 		bool g_forcePowerArmorPipboy = true;
 		bool g_powerArmorAudio = true;
 		bool g_keepPipboyLightOn = true;
+		std::atomic_bool g_rainOverlayOutsidePowerArmor{ false };
 		bool g_usePipboyEffectColor = false;
 		bool g_enableDebugLogging = false;
 		bool g_savedPowerArmorEffectColor = false;
@@ -156,30 +157,41 @@ namespace PowerArmorPipBoyUI::Settings
 			const bool forcePowerArmorPipboy = GetSetting(iniPath, L"bForcePowerArmorPipboy", true);
 			const bool powerArmorAudio = GetSetting(iniPath, L"bPowerArmorAudio", true);
 			const bool keepPipboyLightOn = GetSetting(iniPath, L"bKeepPipboyLightOn", true);
+			const bool rainOverlayOutsidePowerArmor = GetSetting(
+				iniPath,
+				L"bRainOverlayOutsidePowerArmor",
+				false);
 			const bool usePipboyEffectColor = GetSetting(iniPath, L"bUsePipboyEffectColor", false);
 			const bool enableDebugLogging = GetSetting(iniPath, L"bEnableDebugLogging", false);
+			const bool previousRainOverlayOutsidePowerArmor =
+				g_rainOverlayOutsidePowerArmor.load(std::memory_order_relaxed);
 
 			static bool firstLoad = true;
 			const bool changed =
 				forcePowerArmorPipboy != g_forcePowerArmorPipboy ||
 				powerArmorAudio != g_powerArmorAudio ||
 				keepPipboyLightOn != g_keepPipboyLightOn ||
+				rainOverlayOutsidePowerArmor != previousRainOverlayOutsidePowerArmor ||
 				usePipboyEffectColor != g_usePipboyEffectColor ||
 				enableDebugLogging != g_enableDebugLogging;
 
 			g_forcePowerArmorPipboy = forcePowerArmorPipboy;
 			g_powerArmorAudio = powerArmorAudio;
 			g_keepPipboyLightOn = keepPipboyLightOn;
+			g_rainOverlayOutsidePowerArmor.store(
+				rainOverlayOutsidePowerArmor,
+				std::memory_order_relaxed);
 			g_usePipboyEffectColor = usePipboyEffectColor;
 			g_enableDebugLogging = enableDebugLogging;
 			ApplyPipboyEffectColor();
 
 			if (g_enableDebugLogging && (firstLoad || changed)) {
 				DiagnosticLog(
-					"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bUsePipboyEffectColor={} bEnableDebugLogging={} ({})",
+					"Loaded settings: bForcePowerArmorPipboy={} bPowerArmorAudio={} bKeepPipboyLightOn={} bRainOverlayOutsidePowerArmor={} bUsePipboyEffectColor={} bEnableDebugLogging={} ({})",
 					g_forcePowerArmorPipboy,
 					g_powerArmorAudio,
 					g_keepPipboyLightOn,
+					rainOverlayOutsidePowerArmor,
 					g_usePipboyEffectColor,
 					g_enableDebugLogging,
 					iniPath.string());
@@ -201,6 +213,30 @@ namespace PowerArmorPipBoyUI::Settings
 		}
 	}
 
+	void ReloadRainOverlaySetting() noexcept
+	{
+		try {
+			const auto iniPath = GetIniPath();
+			const bool rainOverlayOutsidePowerArmor = GetSetting(
+				iniPath,
+				L"bRainOverlayOutsidePowerArmor",
+				false);
+			const bool previous = g_rainOverlayOutsidePowerArmor.exchange(
+				rainOverlayOutsidePowerArmor,
+				std::memory_order_relaxed);
+			if (previous != rainOverlayOutsidePowerArmor) {
+				DiagnosticLog(
+					"Hot-reloaded bRainOverlayOutsidePowerArmor={} ({})",
+					rainOverlayOutsidePowerArmor,
+					iniPath.string());
+			}
+		} catch (const std::exception& exception) {
+			LogSettingsException(exception.what());
+		} catch (...) {
+			LogSettingsException("unknown exception");
+		}
+	}
+
 	bool ForcePowerArmorPipboy() noexcept
 	{
 		return g_forcePowerArmorPipboy;
@@ -214,6 +250,11 @@ namespace PowerArmorPipBoyUI::Settings
 	bool KeepPipboyLightOn() noexcept
 	{
 		return g_keepPipboyLightOn;
+	}
+
+	bool RainOverlayOutsidePowerArmor() noexcept
+	{
+		return g_rainOverlayOutsidePowerArmor.load(std::memory_order_relaxed);
 	}
 
 	bool DebugLoggingEnabled() noexcept
