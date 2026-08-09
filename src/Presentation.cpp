@@ -17,7 +17,7 @@ namespace PowerArmorPipBoyUI::Presentation
 		RE::NiPointer<RE::NiNode> g_displacedPowerArmorPipboyScreen;
 		std::atomic_bool g_forceThisOpen = false;
 		std::atomic_bool g_loggedFirstPersonFreeze = false;
-		std::atomic_bool g_deferNextScreenReveal = true;
+		std::atomic_uint32_t g_firstScreenRevealFrames = 0;
 		std::atomic_bool g_ownsPowerArmorPipboyGlass = false;
 		std::atomic_bool g_menuOpenCloseSinkRegistered = false;
 		std::atomic_uint64_t g_terminalReturnGeneration = 0;
@@ -296,10 +296,6 @@ namespace PowerArmorPipBoyUI::Presentation
 			// its screen-attached surface. PowerArmorGeometry::ShowPipboyPAGeometry will
 			// unhide it during open; the first open is reculled for one setup frame below.
 			g_powerArmorPipboyScreen->SetAppCulled(true);
-			// Every forced session owns a fresh clone. Give each one a setup frame before
-			// reveal rather than relying on state warmed by a previous clone.
-			g_deferNextScreenReveal.store(true, std::memory_order_relaxed);
-
 			DiagnosticLog(
 				"Loaded an isolated PADashPipboyScreen clone without the Power Armor dashboard");
 			return true;
@@ -355,6 +351,7 @@ namespace PowerArmorPipBoyUI::Presentation
 
 		void ResetForcedPresentation(const std::string_view a_reason)
 		{
+			g_firstScreenRevealFrames.store(0, std::memory_order_relaxed);
 			g_terminalReturnGeneration.fetch_add(1, std::memory_order_relaxed);
 			g_terminalReturnFrames.store(0, std::memory_order_relaxed);
 			g_terminalReturnScreen.store(0, std::memory_order_relaxed);
@@ -382,29 +379,53 @@ namespace PowerArmorPipBoyUI::Presentation
 		void DeferFirstScreenReveal()
 		{
 			auto* geometry = RE::PowerArmorGeometry::GetSingleton();
-			if (!g_deferNextScreenReveal.exchange(false, std::memory_order_relaxed) ||
-				!g_powerArmorPipboyScreen || !geometry ||
+			if (!g_powerArmorPipboyScreen || !geometry ||
 				geometry->pipboyPAGlass.get() != g_powerArmorPipboyScreen.get()) {
 				return;
 			}
 
-			// On the first open, the Interface3D renderer and Scaleform render target are
-			// initialized in the same call that unhides this quad. Re-cull it before that
-			// frame is presented, then reveal it on the following update once the texture
-			// has valid contents. Subsequent opens use the warmed renderer immediately.
+			// Every forced session owns a fresh clone, so every forced open is a cold
+			// render-target handoff. Keep the quad hidden until AdvanceMovie proves that
+			// a complete Pip-Boy menu frame has elapsed.
 			g_powerArmorPipboyScreen->SetAppCulled(true);
-			if (const auto* tasks = F4SE::GetTaskInterface()) {
-				tasks->AddTask([] {
-					auto* manager = RE::PipboyManager::GetSingleton();
-					if (g_forceThisOpen.load(std::memory_order_relaxed) && manager &&
-						manager->QPipboyActive() && g_powerArmorPipboyScreen) {
-						RevealPowerArmorPipboyScreen();
-						DiagnosticLog("Revealed the warmed Pip-Boy screen after its setup frame");
-					}
-				});
-			} else {
-				RevealPowerArmorPipboyScreen();
+			RE::NiUpdateData updateData{};
+			g_powerArmorPipboyScreen->Update(updateData);
+			g_firstScreenRevealFrames.store(2, std::memory_order_release);
+		}
+
+		void AdvanceFirstScreenReveal()
+		{
+			const auto frames = g_firstScreenRevealFrames.load(std::memory_order_acquire);
+			if (frames == 0) {
+				return;
 			}
+
+			auto* manager = RE::PipboyManager::GetSingleton();
+			auto* geometry = RE::PowerArmorGeometry::GetSingleton();
+			if (!g_forceThisOpen.load(std::memory_order_relaxed) ||
+				!g_powerArmorPipboyScreen || !geometry ||
+				geometry->pipboyPAGlass.get() != g_powerArmorPipboyScreen.get()) {
+				g_firstScreenRevealFrames.store(0, std::memory_order_release);
+				return;
+			}
+			if (!manager || !manager->QPipboyActive()) {
+				g_powerArmorPipboyScreen->SetAppCulled(true);
+				return;
+			}
+
+			if (frames > 1) {
+				g_powerArmorPipboyScreen->SetAppCulled(true);
+				RE::NiUpdateData updateData{};
+				g_powerArmorPipboyScreen->Update(updateData);
+				g_firstScreenRevealFrames.store(frames - 1, std::memory_order_release);
+				DiagnosticLog(
+					"Held fresh Pip-Boy screen clone concealed across a PipboyMenu frame");
+				return;
+			}
+
+			RevealPowerArmorPipboyScreen();
+			g_firstScreenRevealFrames.store(0, std::memory_order_release);
+			DiagnosticLog("Revealed fresh Pip-Boy screen clone after its setup frame");
 		}
 
 		[[nodiscard]] RE::NiNode* GetTerminalReturnScreen()
@@ -731,6 +752,7 @@ namespace PowerArmorPipBoyUI::Presentation
 		const std::uint64_t a_time)
 	{
 		Hooks::PipboyMenuAdvanceMovie(a_menu, a_timeDelta, a_time);
+		AdvanceFirstScreenReveal();
 		AdvanceTerminalReturnFlashSuppression();
 	}
 
@@ -826,7 +848,6 @@ namespace PowerArmorPipBoyUI::Presentation
 				a_message->type == F4SE::MessagingInterface::kPostLoadGame ?
 					"post-load game"sv :
 					"new game"sv);
-			g_deferNextScreenReveal.store(true, std::memory_order_relaxed);
 			if (!Settings::ForcePowerArmorPipboy()) {
 				return;
 			}
