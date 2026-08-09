@@ -3,7 +3,7 @@ includes("extern/commonlibf4")
 
 -- set project constants
 set_project("PowerArmorPipBoyUI")
-	set_version("0.3.3")
+	set_version("0.3.5")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")

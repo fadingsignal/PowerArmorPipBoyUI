@@ -9,7 +9,7 @@ namespace PowerArmorPipBoyUI::Settings
 		bool g_forcePowerArmorPipboy = true;
 		bool g_powerArmorAudio = true;
 		bool g_keepPipboyLightOn = true;
-		bool g_rainOverlayOutsidePowerArmor = false;
+		std::atomic_bool g_rainOverlayOutsidePowerArmor{ false };
 		bool g_usePipboyEffectColor = false;
 		bool g_enableDebugLogging = false;
 		bool g_savedPowerArmorEffectColor = false;
@@ -163,20 +163,24 @@ namespace PowerArmorPipBoyUI::Settings
 				false);
 			const bool usePipboyEffectColor = GetSetting(iniPath, L"bUsePipboyEffectColor", false);
 			const bool enableDebugLogging = GetSetting(iniPath, L"bEnableDebugLogging", false);
+			const bool previousRainOverlayOutsidePowerArmor =
+				g_rainOverlayOutsidePowerArmor.load(std::memory_order_relaxed);
 
 			static bool firstLoad = true;
 			const bool changed =
 				forcePowerArmorPipboy != g_forcePowerArmorPipboy ||
 				powerArmorAudio != g_powerArmorAudio ||
 				keepPipboyLightOn != g_keepPipboyLightOn ||
-				rainOverlayOutsidePowerArmor != g_rainOverlayOutsidePowerArmor ||
+				rainOverlayOutsidePowerArmor != previousRainOverlayOutsidePowerArmor ||
 				usePipboyEffectColor != g_usePipboyEffectColor ||
 				enableDebugLogging != g_enableDebugLogging;
 
 			g_forcePowerArmorPipboy = forcePowerArmorPipboy;
 			g_powerArmorAudio = powerArmorAudio;
 			g_keepPipboyLightOn = keepPipboyLightOn;
-			g_rainOverlayOutsidePowerArmor = rainOverlayOutsidePowerArmor;
+			g_rainOverlayOutsidePowerArmor.store(
+				rainOverlayOutsidePowerArmor,
+				std::memory_order_relaxed);
 			g_usePipboyEffectColor = usePipboyEffectColor;
 			g_enableDebugLogging = enableDebugLogging;
 			ApplyPipboyEffectColor();
@@ -187,7 +191,7 @@ namespace PowerArmorPipBoyUI::Settings
 					g_forcePowerArmorPipboy,
 					g_powerArmorAudio,
 					g_keepPipboyLightOn,
-					g_rainOverlayOutsidePowerArmor,
+					rainOverlayOutsidePowerArmor,
 					g_usePipboyEffectColor,
 					g_enableDebugLogging,
 					iniPath.string());
@@ -202,6 +206,30 @@ namespace PowerArmorPipBoyUI::Settings
 		// callbacks. Filesystem/path allocation failures must not unwind into Fallout 4.
 		try {
 			LoadImpl();
+		} catch (const std::exception& exception) {
+			LogSettingsException(exception.what());
+		} catch (...) {
+			LogSettingsException("unknown exception");
+		}
+	}
+
+	void ReloadRainOverlaySetting() noexcept
+	{
+		try {
+			const auto iniPath = GetIniPath();
+			const bool rainOverlayOutsidePowerArmor = GetSetting(
+				iniPath,
+				L"bRainOverlayOutsidePowerArmor",
+				false);
+			const bool previous = g_rainOverlayOutsidePowerArmor.exchange(
+				rainOverlayOutsidePowerArmor,
+				std::memory_order_relaxed);
+			if (previous != rainOverlayOutsidePowerArmor) {
+				DiagnosticLog(
+					"Hot-reloaded bRainOverlayOutsidePowerArmor={} ({})",
+					rainOverlayOutsidePowerArmor,
+					iniPath.string());
+			}
 		} catch (const std::exception& exception) {
 			LogSettingsException(exception.what());
 		} catch (...) {
@@ -226,7 +254,7 @@ namespace PowerArmorPipBoyUI::Settings
 
 	bool RainOverlayOutsidePowerArmor() noexcept
 	{
-		return g_rainOverlayOutsidePowerArmor;
+		return g_rainOverlayOutsidePowerArmor.load(std::memory_order_relaxed);
 	}
 
 	bool DebugLoggingEnabled() noexcept

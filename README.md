@@ -63,12 +63,14 @@ bEnableDebugLogging=0
 Settings are reloaded whenever the Pip-Boy opens and before a forced close, so
 editing the INI does not require restarting Fallout 4. Presentation changes take
 effect on the next open; an audio change made while the menu is open can affect
-its close sound.
+its close sound. The rain-overlay option is also reloaded when the current,
+previous, or forced weather changes, or when a transition crosses into or out
+of active HUD rain; opening the Pip-Boy is not required for those boundaries.
 
 Set `bRainOverlayOutsidePowerArmor` to `1` to show Fallout 4's vanilla
 Power Armor rain-on-glass effect while outside Power Armor. The plugin uses an
-independently loaded instance of the native wet-armor geometry and temporarily leases the
-vanilla `HUDRainRenderer`; genuine Power Armor retains ownership of its normal
+independently loaded instance of the native wet-armor geometry and temporarily
+leases the vanilla `HUDRainRenderer`; genuine Power Armor retains ownership of its normal
 effect. Weather transitions, interiors, submersion, and both first- and
 third-person cameras follow the native behavior.
 

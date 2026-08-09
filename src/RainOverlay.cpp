@@ -17,7 +17,6 @@ namespace PowerArmorPipBoyUI::RainOverlay
 		constexpr float kWeatherByteScale = 0.003921569F;
 		constexpr float kWeatherTransitionScale = 0.999F;
 		constexpr float kWeatherTransitionEpsilon = 0.001F;
-
 		struct RendererState
 		{
 			float opacityAlpha;
@@ -33,6 +32,18 @@ namespace PowerArmorPipBoyUI::RainOverlay
 			RE::BSFixedString screenMaterialName;
 		};
 
+		struct WeatherSnapshot
+		{
+			const RE::TESWeather* currentWeather;
+			const RE::TESWeather* lastWeather;
+			const RE::TESWeather* overrideWeather;
+			std::uint8_t currentFlags;
+			std::uint8_t lastFlags;
+			bool activeHUDRain;
+
+			bool operator==(const WeatherSnapshot&) const = default;
+		};
+
 		RE::NiPointer<RE::NiNode> g_rainGeometry;
 		RE::NiPointer<RE::NiAVObject> g_displacedRendererRoot;
 		RE::NiPointer<RE::ImageSpaceModifierInstanceForm> g_imageSpaceModifier;
@@ -42,6 +53,7 @@ namespace PowerArmorPipBoyUI::RainOverlay
 		bool g_ownsRendererRoot = false;
 		bool g_loggedRendererConflict = false;
 		bool g_loggedMissingModifier = false;
+		std::optional<WeatherSnapshot> g_weatherSnapshot;
 
 		[[nodiscard]] RE::BSModelDB::DBTraits::ArgsType MakeRainLoadArgs()
 		{
@@ -276,6 +288,46 @@ namespace PowerArmorPipBoyUI::RainOverlay
 			return currentRaining || lastRaining;
 		}
 
+		[[nodiscard]] std::uint8_t WeatherFlags(const RE::TESWeather* a_weather)
+		{
+			return a_weather ?
+			           static_cast<std::uint8_t>(a_weather->weatherData[
+						   std::to_underlying(RE::TESWeather::WeatherData::kFlags)]) :
+			           0;
+		}
+
+		[[nodiscard]] WeatherSnapshot CaptureWeatherSnapshot()
+		{
+			const auto* sky = RE::Sky::GetSingleton();
+			if (!sky) {
+				return {};
+			}
+
+			const bool activeHUDRain =
+				sky->currentWeather &&
+				WeatherHasFlag(
+					*sky->currentWeather,
+					RE::TESWeather::WeatherDataFlags::kHudRain) &&
+				IsActivelyRaining(*sky);
+			return {
+				sky->currentWeather,
+				sky->lastWeather,
+				sky->overrideWeather,
+				WeatherFlags(sky->currentWeather),
+				WeatherFlags(sky->lastWeather),
+				activeHUDRain,
+			};
+		}
+
+		void ReloadSettingOnWeatherEdge()
+		{
+			const auto snapshot = CaptureWeatherSnapshot();
+			if (!g_weatherSnapshot || *g_weatherSnapshot != snapshot) {
+				Settings::ReloadRainOverlaySetting();
+				g_weatherSnapshot = snapshot;
+			}
+		}
+
 		[[nodiscard]] bool ShouldShowRain(const RE::PlayerCharacter& a_player)
 		{
 			const auto* sky = RE::Sky::GetSingleton();
@@ -327,6 +379,7 @@ namespace PowerArmorPipBoyUI::RainOverlay
 		void Reset(const std::string_view a_reason, const bool a_releaseGeometry)
 		{
 			RelinquishRenderer(a_reason);
+			g_weatherSnapshot.reset();
 			if (a_releaseGeometry) {
 				g_rainGeometry.reset();
 				g_renderer = nullptr;
@@ -350,6 +403,7 @@ namespace PowerArmorPipBoyUI::RainOverlay
 		}
 
 		Hooks::HUDMenuAdvanceMovie(a_menu, a_timeDelta, a_time);
+		ReloadSettingOnWeatherEdge();
 
 		const auto* player = RE::PlayerCharacter::GetSingleton();
 		if (!g_gameDataReady || !Settings::RainOverlayOutsidePowerArmor() || !player ||

@@ -3,6 +3,7 @@
 namespace PowerArmorPipBoyUI::Settings
 {
 	void Load() noexcept;
+	void ReloadRainOverlaySetting() noexcept;
 
 	[[nodiscard]] bool ForcePowerArmorPipboy() noexcept;
 	[[nodiscard]] bool PowerArmorAudio() noexcept;
