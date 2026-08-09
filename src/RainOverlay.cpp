@@ -341,6 +341,12 @@ namespace PowerArmorPipBoyUI::RainOverlay
 			return std::isfinite(submergeLevel) && submergeLevel < kMaximumSubmergeLevel;
 		}
 
+		[[nodiscard]] bool LoadingScreenOpen()
+		{
+			const auto* ui = RE::UI::GetSingleton();
+			return ui && ui->GetMenuOpen<RE::LoadingMenu>();
+		}
+
 		void StartRain(const std::uint64_t a_time)
 		{
 			if (!AcquireRenderer()) {
@@ -406,7 +412,8 @@ namespace PowerArmorPipBoyUI::RainOverlay
 		ReloadSettingOnWeatherEdge();
 
 		const auto* player = RE::PlayerCharacter::GetSingleton();
-		if (!g_gameDataReady || !Settings::RainOverlayOutsidePowerArmor() || !player ||
+		if (!g_gameDataReady || LoadingScreenOpen() ||
+			!Settings::RainOverlayOutsidePowerArmor() || !player ||
 			Hooks::ActorInPowerArmor(*player)) {
 			if (g_ownsRendererRoot) {
 				RelinquishRenderer("rain presentation not eligible"sv);

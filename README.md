@@ -72,7 +72,9 @@ Power Armor rain-on-glass effect while outside Power Armor. The plugin uses an
 independently loaded instance of the native wet-armor geometry and temporarily
 leases the vanilla `HUDRainRenderer`; genuine Power Armor retains ownership of its normal
 effect. Weather transitions, interiors, submersion, and both first- and
-third-person cameras follow the native behavior.
+third-person cameras follow the native behavior. The added overlay is
+is suppressed while `LoadingMenu` is open so exterior rain does not render over a
+loading screen.
 
 Set `bUsePipboyEffectColor` to `1` to use the player's
 `fPipboyEffectColorR/G/B` values from `Fallout4Prefs.ini` in place of the Power
