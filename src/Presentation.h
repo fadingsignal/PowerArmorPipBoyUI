@@ -27,6 +27,10 @@ namespace PowerArmorPipBoyUI::Presentation
 	void UpdateFirstPersonCameraForForcedPresentation(
 		RE::TESCameraState* a_state,
 		RE::BSTSmartPointer<RE::TESCameraState>& a_nextState);
+	void AdvancePipboyMenuForTerminalReturn(
+		RE::IMenu* a_menu,
+		float a_timeDelta,
+		std::uint64_t a_time);
 
 	void OnF4SEMessage(F4SE::MessagingInterface::Message* a_message);
 }

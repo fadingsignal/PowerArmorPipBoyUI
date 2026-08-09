@@ -18,6 +18,28 @@ namespace PowerArmorPipBoyUI::Presentation
 		std::atomic_bool g_loggedFirstPersonFreeze = false;
 		std::atomic_bool g_deferNextScreenReveal = true;
 		std::atomic_bool g_ownsPowerArmorPipboyGlass = false;
+		std::atomic_bool g_menuOpenCloseSinkRegistered = false;
+		std::atomic_uint64_t g_terminalReturnGeneration = 0;
+		std::atomic_uintptr_t g_terminalReturnScreen = 0;
+		std::atomic_uint32_t g_terminalReturnFrames = 0;
+
+		void SuppressTerminalReturnFlash();
+
+		class MenuOpenCloseSink final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+		{
+		public:
+			RE::BSEventNotifyControl ProcessEvent(
+				const RE::MenuOpenCloseEvent& a_event,
+				RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+			{
+				if (!a_event.opening && a_event.menuName == RE::TerminalMenu::MENU_NAME) {
+					SuppressTerminalReturnFlash();
+				}
+				return RE::BSEventNotifyControl::kContinue;
+			}
+		};
+
+		MenuOpenCloseSink g_menuOpenCloseSink;
 
 		struct ShaderState
 		{
@@ -332,6 +354,9 @@ namespace PowerArmorPipBoyUI::Presentation
 
 		void ResetForcedPresentation(const std::string_view a_reason)
 		{
+			g_terminalReturnGeneration.fetch_add(1, std::memory_order_relaxed);
+			g_terminalReturnFrames.store(0, std::memory_order_relaxed);
+			g_terminalReturnScreen.store(0, std::memory_order_relaxed);
 			const bool wasForced = g_forceThisOpen.exchange(false, std::memory_order_relaxed);
 			g_loggedFirstPersonFreeze.store(false, std::memory_order_relaxed);
 			DetachStandalonePowerArmorPipboyGeometry();
@@ -378,6 +403,105 @@ namespace PowerArmorPipBoyUI::Presentation
 				});
 			} else {
 				RevealPowerArmorPipboyScreen();
+			}
+		}
+
+		[[nodiscard]] RE::NiNode* GetTerminalReturnScreen()
+		{
+			auto* manager = RE::PipboyManager::GetSingleton();
+			auto* ui = RE::UI::GetSingleton();
+			const auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!manager || !manager->QPipboyActive() || !ui ||
+				!ui->GetMenuOpen<RE::PipboyMenu>() || !player ||
+				(!g_forceThisOpen.load(std::memory_order_relaxed) &&
+					!Hooks::ActorInPowerArmor(*player))) {
+				return nullptr;
+			}
+
+			auto* geometry = RE::PowerArmorGeometry::GetSingleton();
+			return geometry ? geometry->pipboyPAGlass.get() : nullptr;
+		}
+
+		void SetTerminalReturnScreenCulled(RE::NiNode& a_screen, const bool a_culled)
+		{
+			a_screen.SetAppCulled(a_culled);
+			RE::NiUpdateData updateData{};
+			a_screen.Update(updateData);
+		}
+
+		void SuppressTerminalReturnFlash()
+		{
+			auto* screen = GetTerminalReturnScreen();
+			if (!screen) {
+				return;
+			}
+
+			g_terminalReturnGeneration.fetch_add(1, std::memory_order_relaxed);
+			g_terminalReturnScreen.store(
+				reinterpret_cast<std::uintptr_t>(screen),
+				std::memory_order_relaxed);
+			g_terminalReturnFrames.store(2, std::memory_order_release);
+			SetTerminalReturnScreenCulled(*screen, true);
+			DiagnosticLog(
+				"Concealed PA Pip-Boy screen for terminal render-target handoff (screen={:p})",
+				static_cast<const void*>(screen));
+		}
+
+		void AdvanceTerminalReturnFlashSuppression()
+		{
+			const auto frames = g_terminalReturnFrames.load(std::memory_order_acquire);
+			if (frames == 0) {
+				return;
+			}
+
+			const auto generation =
+				g_terminalReturnGeneration.load(std::memory_order_relaxed);
+			const auto expectedScreen =
+				g_terminalReturnScreen.load(std::memory_order_relaxed);
+			auto* screen = GetTerminalReturnScreen();
+			if (!screen || reinterpret_cast<std::uintptr_t>(screen) != expectedScreen) {
+				g_terminalReturnFrames.store(0, std::memory_order_release);
+				g_terminalReturnScreen.store(0, std::memory_order_relaxed);
+				return;
+			}
+
+			if (frames > 1) {
+				SetTerminalReturnScreenCulled(*screen, true);
+				if (g_terminalReturnGeneration.load(std::memory_order_relaxed) == generation) {
+					g_terminalReturnFrames.store(frames - 1, std::memory_order_release);
+					DiagnosticLog(
+						"Held PA Pip-Boy screen concealed across a PipboyMenu frame (screen={:p})",
+						static_cast<const void*>(screen));
+				}
+				return;
+			}
+
+			auto* ui = RE::UI::GetSingleton();
+			if (!ui || ui->GetMenuOpen<RE::TerminalMenu>()) {
+				SetTerminalReturnScreenCulled(*screen, true);
+				return;
+			}
+
+			SetTerminalReturnScreenCulled(*screen, false);
+			if (g_terminalReturnGeneration.load(std::memory_order_relaxed) == generation) {
+				g_terminalReturnFrames.store(0, std::memory_order_release);
+				g_terminalReturnScreen.store(0, std::memory_order_relaxed);
+				DiagnosticLog(
+					"Revealed PA Pip-Boy screen after terminal render-target handoff (screen={:p})",
+					static_cast<const void*>(screen));
+			}
+		}
+
+		void RegisterMenuOpenCloseSink()
+		{
+			if (g_menuOpenCloseSinkRegistered.load(std::memory_order_relaxed)) {
+				return;
+			}
+
+			if (auto* ui = RE::UI::GetSingleton()) {
+				ui->RegisterSink(std::addressof(g_menuOpenCloseSink));
+				g_menuOpenCloseSinkRegistered.store(true, std::memory_order_relaxed);
+				DiagnosticLog("Registered PipboyMenu-frame terminal-return flash suppression");
 			}
 		}
 
@@ -600,6 +724,15 @@ namespace PowerArmorPipBoyUI::Presentation
 		Hooks::FirstPersonStateUpdate(a_state, a_nextState);
 	}
 
+	void AdvancePipboyMenuForTerminalReturn(
+		RE::IMenu* a_menu,
+		const float a_timeDelta,
+		const std::uint64_t a_time)
+	{
+		Hooks::PipboyMenuAdvanceMovie(a_menu, a_timeDelta, a_time);
+		AdvanceTerminalReturnFlashSuppression();
+	}
+
 	void OpenPipboyWithoutWristAnimation(
 		RE::PipboyManager* a_manager,
 		const RE::BSFixedString& a_menuName)
@@ -671,6 +804,8 @@ namespace PowerArmorPipBoyUI::Presentation
 				return;
 			}
 
+			RegisterMenuOpenCloseSink();
+
 			if (!Settings::ForcePowerArmorPipboy()) {
 				return;
 			}
@@ -683,6 +818,7 @@ namespace PowerArmorPipBoyUI::Presentation
 
 		if (a_message->type == F4SE::MessagingInterface::kPostLoadGame ||
 			a_message->type == F4SE::MessagingInterface::kNewGame) {
+			RegisterMenuOpenCloseSink();
 			ResetForcedPresentation(
 				a_message->type == F4SE::MessagingInterface::kPostLoadGame ?
 					"post-load game"sv :

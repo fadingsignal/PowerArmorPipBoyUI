@@ -15,4 +15,8 @@ namespace PowerArmorPipBoyUI::Hooks
 	void FirstPersonStateUpdate(
 		RE::TESCameraState* a_state,
 		RE::BSTSmartPointer<RE::TESCameraState>& a_nextState);
+	void PipboyMenuAdvanceMovie(
+		RE::IMenu* a_menu,
+		float a_timeDelta,
+		std::uint64_t a_time);
 }

@@ -18,12 +18,14 @@ namespace PowerArmorPipBoyUI::Hooks
 		using FirstPersonStateUpdate_t = void (*)(
 			RE::TESCameraState*,
 			RE::BSTSmartPointer<RE::TESCameraState>&);
+		using PipboyMenuAdvanceMovie_t = void (*)(RE::IMenu*, float, std::uint64_t);
 
 		ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
 		ClosedownPipboy_t g_closedownPipboy = nullptr;
 		PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
 		PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
 		FirstPersonStateUpdate_t g_firstPersonStateUpdate = nullptr;
+		PipboyMenuAdvanceMovie_t g_pipboyMenuAdvanceMovie = nullptr;
 	}
 
 	bool Install()
@@ -93,8 +95,17 @@ namespace PowerArmorPipBoyUI::Hooks
 				Runtime::kFirstPersonStateUpdateIndex,
 				Presentation::UpdateFirstPersonCameraForForcedPresentation));
 
+		// CommonLib's primary PipboyMenu vtable ID is Address Library-backed for
+		// every supported runtime. AdvanceMovie provides a genuine menu/render frame
+		// boundary without adding another executable call-site address.
+		REL::Relocation<std::uintptr_t> pipboyMenuVtable{ RE::PipboyMenu::VTABLE[0] };
+		g_pipboyMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
+			pipboyMenuVtable.write_vfunc(
+				0x04,
+				Presentation::AdvancePipboyMenuForTerminalReturn));
+
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, and the first-person camera freeze",
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, the first-person camera freeze, and the PipboyMenu frame handoff",
 			addresses->presentation.size(),
 			addresses->pipboyLoadHolotapeCalls.size(),
 			addresses->pipboyCloseCalls.size());
@@ -130,5 +141,13 @@ namespace PowerArmorPipBoyUI::Hooks
 		RE::BSTSmartPointer<RE::TESCameraState>& a_nextState)
 	{
 		g_firstPersonStateUpdate(a_state, a_nextState);
+	}
+
+	void PipboyMenuAdvanceMovie(
+		RE::IMenu* a_menu,
+		const float a_timeDelta,
+		const std::uint64_t a_time)
+	{
+		g_pipboyMenuAdvanceMovie(a_menu, a_timeDelta, a_time);
 	}
 }
