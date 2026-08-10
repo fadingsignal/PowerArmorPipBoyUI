@@ -40,50 +40,45 @@ namespace PowerArmorPipBoyUI::Hooks
 		GetSubmergeLevel_t g_getSubmergeLevel = nullptr;
 	}
 
-	bool Install()
+	void Install(const Runtime::HookAddresses& a_addresses)
 	{
-		const auto addresses = Runtime::ResolveHookAddresses();
-		if (!addresses) {
-			return false;
-		}
-
 		g_actorInPowerArmor = reinterpret_cast<ActorInPowerArmor_t>(
-			addresses->actorInPowerArmor);
+			a_addresses.actorInPowerArmor);
 		g_getPowerArmorHUDRainModifier =
 			reinterpret_cast<GetPowerArmorHUDRainModifier_t>(
-				addresses->powerArmorHUDRainModifierGetter);
+				a_addresses.powerArmorHUDRainModifierGetter);
 		g_referenceIsInterior = reinterpret_cast<ReferenceIsInterior_t>(
-			addresses->referenceIsInterior);
+			a_addresses.referenceIsInterior);
 		g_getSubmergeLevel = reinterpret_cast<GetSubmergeLevel_t>(
-			addresses->getSubmergeLevel);
+			a_addresses.getSubmergeLevel);
 
 		auto& trampoline = REL::GetTrampoline();
-		for (const auto address : addresses->presentation) {
+		for (const auto address : a_addresses.presentation) {
 			trampoline.write_call<5>(address, Presentation::UsePowerArmorPipboy);
 		}
-		for (const auto address : addresses->openAudio) {
+		for (const auto address : a_addresses.openAudio) {
 			trampoline.write_call<5>(address, Presentation::UsePowerArmorPipboyAudio);
 		}
-		for (const auto address : addresses->closeAudio) {
+		for (const auto address : a_addresses.closeAudio) {
 			trampoline.write_call<5>(address, Presentation::UsePowerArmorPipboyAudio);
 		}
-		for (const auto address : addresses->light) {
+		for (const auto address : a_addresses.light) {
 			trampoline.write_call<5>(address, Presentation::UsePowerArmorPipboyLight);
 		}
 
 		trampoline.write_call<5>(
-			addresses->tabHandlerCall,
+			a_addresses.tabHandlerCall,
 			Presentation::OpenPipboyWithoutWristAnimation);
 		trampoline.write_call<5>(
-			addresses->companionUseItemCall,
+			a_addresses.companionUseItemCall,
 			Presentation::OpenPipboyWithoutWristAnimation);
 
-		for (const auto address : addresses->pipboyCloseCalls) {
+		for (const auto address : a_addresses.pipboyCloseCalls) {
 			trampoline.write_call<5>(
 				address,
 				Presentation::PlayPipboyCloseForForcedPresentation);
 		}
-		for (const auto address : addresses->pipboyLoadHolotapeCalls) {
+		for (const auto address : a_addresses.pipboyLoadHolotapeCalls) {
 			trampoline.write_call<5>(
 				address,
 				Presentation::PlayPipboyLoadHolotapeForForcedPresentation);
@@ -91,11 +86,11 @@ namespace PowerArmorPipBoyUI::Hooks
 
 		g_closedownPipboy = reinterpret_cast<ClosedownPipboy_t>(
 			trampoline.write_call<5>(
-				addresses->closedown.front(),
+				a_addresses.closedown.front(),
 				Presentation::ClosedownPipboyAndReset));
 
 		REL::Relocation<std::uintptr_t> pipboyMenuInputVtable{
-			addresses->pipboyMenuInputVtable
+			a_addresses.pipboyMenuInputVtable
 		};
 		g_pipboyMenuShouldHandleEvent = reinterpret_cast<PipboyMenuShouldHandleEvent_t>(
 			pipboyMenuInputVtable.write_vfunc(
@@ -107,7 +102,7 @@ namespace PowerArmorPipBoyUI::Hooks
 				Presentation::HandleForcedPipboyClose));
 
 		REL::Relocation<std::uintptr_t> firstPersonStateVtable{
-			addresses->firstPersonStateVtable
+			a_addresses.firstPersonStateVtable
 		};
 		g_firstPersonStateUpdate = reinterpret_cast<FirstPersonStateUpdate_t>(
 			firstPersonStateVtable.write_vfunc(
@@ -123,7 +118,7 @@ namespace PowerArmorPipBoyUI::Hooks
 				0x04,
 				Presentation::AdvancePipboyMenuForTerminalReturn));
 
-		REL::Relocation<std::uintptr_t> hudMenuVtable{ addresses->hudMenuVtable };
+		REL::Relocation<std::uintptr_t> hudMenuVtable{ a_addresses.hudMenuVtable };
 		g_hudMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
 			hudMenuVtable.write_vfunc(
 				Runtime::kHUDMenuAdvanceMovieIndex,
@@ -131,10 +126,9 @@ namespace PowerArmorPipBoyUI::Hooks
 
 		REX::INFO(
 			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, the first-person camera freeze, the PipboyMenu frame handoff, and the HUD rain frame handoff",
-			addresses->presentation.size(),
-			addresses->pipboyLoadHolotapeCalls.size(),
-			addresses->pipboyCloseCalls.size());
-		return true;
+			a_addresses.presentation.size(),
+			a_addresses.pipboyLoadHolotapeCalls.size(),
+			a_addresses.pipboyCloseCalls.size());
 	}
 
 	bool ActorInPowerArmor(const RE::Actor& a_actor)

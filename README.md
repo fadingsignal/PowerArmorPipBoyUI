@@ -73,7 +73,7 @@ independently loaded instance of the native wet-armor geometry and temporarily
 leases the vanilla `HUDRainRenderer`; genuine Power Armor retains ownership of its normal
 effect. Weather transitions, interiors, submersion, and both first- and
 third-person cameras follow the native behavior. The added overlay is
-is suppressed while `LoadingMenu` is open so exterior rain does not render over a
+suppressed while `LoadingMenu` is open so exterior rain does not render over a
 loading screen.
 
 Set `bUsePipboyEffectColor` to `1` to use the player's
@@ -119,6 +119,23 @@ filesystem failures are contained at the reload boundary rather than unwinding
 through an engine hook; the previous/default settings remain available and the
 failure is logged.
 
+## Source architecture
+
+Startup first resolves and validates every runtime-specific hook site, then
+registers the required F4SE lifecycle listener, and only then writes patches.
+The lifecycle coordinator dispatches game-data transitions to the presentation
+and rain subsystems so both can release engine-owned state before teardown.
+
+Forced presentation is divided into explicit session state, input policy,
+screen-geometry ownership, and terminal render-target handoff modules. Rain
+weather policy is separate from the temporary `HUDRainRenderer` lease. Both
+geometry modules restore the exact displaced engine object when they still own
+the relevant slot and relinquish ownership without overwriting a replacement.
+
+Settings are parsed into a complete temporary snapshot and atomically published
+only after the entire INI has been read successfully. A missing, truncated, or
+unparseable file therefore leaves the previous live settings intact.
+
 ## Building
 
 Building requires xmake 3.0.0 or newer and a C++23-capable Visual Studio 2022
@@ -141,3 +158,7 @@ The packaged DLL, PDB, and INI are written beneath `dist/F4SE/Plugins`.
 Keep the explicit `-o dist` argument: it prevents CommonLibF4's optional
 `XSE_FO4_MODS_PATH` or `XSE_FO4_GAME_PATH` environment variables from sending
 the package to a mod-manager or game directory instead.
+
+Dependency resolutions are pinned in `xmake-requires.lock`. Re-run
+`xmake f -m releasedbg` intentionally when updating the pinned CommonLib
+submodule or its xmake package requirements.

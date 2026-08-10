@@ -1,5 +1,10 @@
+set_xmakever("3.0.0")
+
 -- CommonLibF4 is pinned as a repository submodule for reproducible builds.
 includes("extern/commonlibf4")
+
+-- enable typed INI parsing support from the pinned CommonLib dependency
+set_config("commonlib_ini", true)
 
 -- set project constants
 set_project("PowerArmorPipBoyUI")
@@ -7,6 +12,7 @@ set_project("PowerArmorPipBoyUI")
 set_license("GPL-3.0")
 set_languages("c++23")
 set_warnings("allextra")
+set_policy("package.requires_lock", true)
 
 -- add common rules
 add_rules("mode.debug", "mode.releasedbg")
@@ -27,3 +33,4 @@ target("PowerArmorPipBoyUI")
     add_includedirs("src")
     set_pcxxheader("src/pch.h")
     add_installfiles("res/PowerArmorPipBoyUI.ini", { prefixdir = "F4SE/Plugins" })
+    add_extrafiles(".clang-format")

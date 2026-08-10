@@ -1,5 +1,6 @@
 #include "Hooks.h"
-#include "Presentation.h"
+#include "Lifecycle.h"
+#include "Runtime.h"
 #include "Settings.h"
 
 F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
@@ -17,17 +18,14 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 	}
 
 	PowerArmorPipBoyUI::Settings::Load();
-	if (!PowerArmorPipBoyUI::Hooks::Install()) {
+	const auto hookAddresses = PowerArmorPipBoyUI::Runtime::ResolveHookAddresses();
+	if (!hookAddresses) {
 		return false;
 	}
-
-	const auto* messaging = F4SE::GetMessagingInterface();
-	if (!messaging ||
-		!messaging->RegisterListener(PowerArmorPipBoyUI::Presentation::OnF4SEMessage)) {
-		// Preloading is only an optimization. The input hook performs the same load
-		// lazily, so do not fail plugin load after the call sites have been patched.
-		REX::WARN("Could not register the F4SE message listener; the screen will load on first open");
+	if (!PowerArmorPipBoyUI::Lifecycle::Register()) {
+		return false;
 	}
+	PowerArmorPipBoyUI::Hooks::Install(*hookAddresses);
 
 	return true;
 }

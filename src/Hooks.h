@@ -1,8 +1,13 @@
 #pragma once
 
+namespace PowerArmorPipBoyUI::Runtime
+{
+	struct HookAddresses;
+}
+
 namespace PowerArmorPipBoyUI::Hooks
 {
-	[[nodiscard]] bool Install();
+	void Install(const Runtime::HookAddresses& a_addresses);
 
 	bool ActorInPowerArmor(const RE::Actor& a_actor);
 	void ClosedownPipboy(RE::PipboyManager* a_manager);

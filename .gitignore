@@ -15,6 +15,9 @@
 # Claude Code (machine-local settings; shared settings.json may be committed)
 /.claude/settings.local.json
 
+# Codex
+agents.md
+
 # OS cruft
 Thumbs.db
 Desktop.ini

@@ -1,0 +1,39 @@
+{
+    __meta__ = {
+        version = "1.0"
+    },
+    ["windows|x64"] = {
+        ["cmake#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "959fd7a23490f9a5d724f4a54c7811539dbe154c",
+                url = "https://gitlab.com/tboox/xmake-repo.git"
+            },
+            version = "4.3.4"
+        },
+        ["ninja#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "959fd7a23490f9a5d724f4a54c7811539dbe154c",
+                url = "https://gitlab.com/tboox/xmake-repo.git"
+            },
+            version = "v1.13.2"
+        },
+        ["simpleini v4.25#f56260b5"] = {
+            repo = {
+                branch = "master",
+                commit = "959fd7a23490f9a5d724f4a54c7811539dbe154c",
+                url = "https://gitlab.com/tboox/xmake-repo.git"
+            },
+            version = "v4.25"
+        },
+        ["spdlog v1.16.0#09c8c173"] = {
+            repo = {
+                branch = "master",
+                commit = "959fd7a23490f9a5d724f4a54c7811539dbe154c",
+                url = "https://gitlab.com/tboox/xmake-repo.git"
+            },
+            version = "v1.16.0"
+        }
+    }
+}
