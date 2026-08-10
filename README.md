@@ -1,54 +1,27 @@
 # Power Armor Pip-Boy UI
 
-An F4SE/CommonLibF4 plugin that presents Fallout 4's Pip-Boy menu the way it
-appears in power armor — an instant, translucent fullscreen overlay — without
-raising or displaying the wrist-mounted Pip-Boy.
+## Overview
 
-The initial prototype supports Fallout 4 `1.10.163` only. It uses the Address
-Library for most containing functions and validated runtime-specific offsets for
-a small number of call sites that have no reliable library ID. Every instruction
-and target is checked before the plugin writes anything.
+Power Armor Pip-Boy UI is an F4SE/CommonLibF4 plugin for Fallout 4 that replaces
+the wrist-mounted Pip-Boy UI with the instant, translucent fullscreen presentation
+present when wearing Power Armor.
 
-## Requirements
+It also has an added bonus feature of showing rain drips on the screen outside of
+Power Armor.
+
+All options can be toggled on/off on the INI.
+
+Requirements:
 
 - Fallout 4 `1.10.163`
 - F4SE `0.6.23`
-- Address Library for F4SE Plugins containing `version-1-10-163-0.bin`
+- Address Library for F4SE Plugins with `version-1-10-163-0.bin`
 
-## How it works
+## Installation
 
-Both presentations use the same `PipboyMenu` Scaleform movie and the same
-`"PipboyMenu"` Interface3D renderer. The only difference is what the movie is
-composited onto, chosen by `PipboyManager::RefreshPipboyRenderSurface`:
-
-- Outside power armor the renderer is *world-attached* to the screen mesh on the
-  player's raised wrist.
-- In power armor it is *screen-attached* to `pipboyPAGlass`, a camera-aligned
-  quad loaded from `Interface/Objects/PADashPipboyScreen.nif`, with
-  `useFullPremultAlpha` set and the scanline effect disabled.
-
-`PipboyManager` reaches that decision through a series of `Actor::IsInPowerArmor`
-calls; the plugin redirects only its Pip-Boy call sites so the power-armor branch
-is taken. It loads `PADashPipboyScreen.nif` directly through `BSModelDB`, without
-initializing the Power Armor dashboard, rain plane, or PA animation graph. The
-decision is latched before each open so the viewport, renderer, shader, camera,
-menu hit testing, and close path all see the same presentation. Matching the
-menu's hit-test geometry to the screen-attached quad is required for cursor and
-button interaction. If the screen cannot be loaded, the plugin falls back to
-the wrist presentation rather than rendering an empty screen.
-
-The normal player behavior graph delays the menu until it emits the
-`pipboyOpened` event after the wrist-raise animation. For forced opens the plugin
-uses the engine's generic no-animation path, which proceeds directly to the same
-Pip-Boy open-completion handler. Genuine Power Armor opens keep their vanilla
-behavior graph.
-
-This does not touch `PowerArmorHUDMenu` — the helmet dials, battery gauge and
-vignette are a separate menu and never appear.
-
-## Configuration
-
-Install `PowerArmorPipBoyUI.ini` beside the DLL in `Data/F4SE/Plugins`:
+Install the DLL and `PowerArmorPipBoyUI.ini` in `Data/F4SE/Plugins`. The INI is
+reloaded while the game is running, with presentation changes taking effect the
+next time the Pip-Boy opens.
 
 ```ini
 [General]
@@ -60,105 +33,66 @@ bUsePipboyEffectColor=0
 bEnableDebugLogging=0
 ```
 
-Settings are reloaded whenever the Pip-Boy opens and before a forced close, so
-editing the INI does not require restarting Fallout 4. Presentation changes take
-effect on the next open; an audio change made while the menu is open can affect
-its close sound. The rain-overlay option is also reloaded when the current,
-previous, or forced weather changes, or when a transition crosses into or out
-of active HUD rain; opening the Pip-Boy is not required for those boundaries.
+- `bForcePowerArmorPipboy` enables the fullscreen Pip-Boy outside power armor.
+- `bPowerArmorAudio` uses the power-armor open and close sounds.
+- `bKeepPipboyLightOn` preserves the Pip-Boy light while the menu is open.
+- `bRainOverlayOutsidePowerArmor` enables the vanilla rain-on-glass effect
+  outside power armor.
+- `bUsePipboyEffectColor` uses the player's Pip-Boy color instead of the fixed
+  power-armor orange.
+- `bEnableDebugLogging` enables verbose diagnostic logging. Warnings and errors
+  are always logged.
 
-Set `bRainOverlayOutsidePowerArmor` to `1` to show Fallout 4's vanilla
-Power Armor rain-on-glass effect while outside Power Armor. The plugin uses an
-independently loaded instance of the native wet-armor geometry and temporarily
-leases the vanilla `HUDRainRenderer`; genuine Power Armor retains ownership of its normal
-effect. Weather transitions, interiors, submersion, and both first- and
-third-person cameras follow the native behavior. The added overlay is
-suppressed while `LoadingMenu` is open so exterior rain does not render over a
-loading screen.
 
-Set `bUsePipboyEffectColor` to `1` to use the player's
-`fPipboyEffectColorR/G/B` values from `Fallout4Prefs.ini` in place of the Power
-Armor Pip-Boy's fixed `fPAEffectColorR/G/B` orange. This affects both genuine
-and forced Power Armor Pip-Boy presentations. `bPipboyDisableFX` continues to
-control whether Fallout 4 renders the Pip-Boy scanline/effect pass at all.
+## Technical Detail
 
-Set `bForcePowerArmorPipboy` to `0` to restore the normal wrist-mounted Pip-Boy
-presentation on the next open.
+The plugin reuses Fallout 4's existing `PipboyMenu` movie and
+`"PipboyMenu"` Interface3D renderer. It redirects only the relevant Pip-Boy
+power-armor checks, loads `Interface/Objects/PADashPipboyScreen.nif` through
+`BSModelDB`, and attaches the renderer to that camera-aligned screen. If the
+screen cannot be loaded, it falls back to the vanilla wrist presentation.
 
-Set `bEnableDebugLogging` to `1` to record verbose menu-transition, geometry,
-camera, holotape, color, and live-settings diagnostics. Errors, warnings, and
-the startup hook-install summary are always logged. The default is `0` for a
-quieter release log; enable it before reproducing an issue when additional
-diagnostic detail is useful.
+Forced opens use the engine's no-animation path because the normal player
+behavior graph cannot emit the power-armor animation events. Genuine
+power-armor use remains vanilla. Close paths still converge on the engine's
+`ClosedownPipboy` routine so menu, cursor, input, light, and deferred-action
+state are restored normally.
 
-## Open paths
+Runtime-specific hook sites and targets are validated before any patches are
+written. F4SE lifecycle registration also completes before hook installation.
+Presentation state, input policy, screen geometry, terminal handoff, rain
+policy, and renderer ownership are separated into focused modules. Settings
+are parsed into a complete snapshot and published atomically; a missing or
+invalid INI leaves the previous settings active.
 
-Both the Tab/Pip-Boy input handler and the Pip-Boy companion app's use-item
-command are redirected to the instant no-animation open. Interacting with a
-world terminal is deliberately left alone; only a `TerminalMenu` launched by a
-holotape inside an active forced Pip-Boy receives the PA presentation decisions.
-
-While a forced menu is open, the plugin admits the Pip-Boy toggle at the stable
-top level and completes the PA close event synchronously. This avoids waiting
-for an event that the non-PA animation graph cannot produce. Item inspection,
-modal prompts, holotape games, and terminal-form holotapes retain ownership of
-Cancel/Tab until their native unwind has finished, so the parent Pip-Boy is not
-closed beneath a nested input layer.
-
-Holotape loads use the engine's native no-animation path during a forced
-presentation. Pip-Boy games continue through `PipboyHolotapeMenu`; terminal-form
-holotapes continue through `TerminalMenu`, with its PA render-target dimensions
-and hit-test projection selected so framing and mouse input match the fullscreen
-quad. Genuine power armor keeps its vanilla holotape behavior.
-
-All final-close paths converge on the engine's `ClosedownPipboy` routine. The
-plugin resets its forced state and detaches the standalone screen only after
-that routine restores menu, cursor, input, light, and deferred-action state.
-Load and new-game messages provide an additional defensive reset. Settings and
-filesystem failures are contained at the reload boundary rather than unwinding
-through an engine hook; the previous/default settings remain available and the
-failure is logged.
-
-## Source architecture
-
-Startup first resolves and validates every runtime-specific hook site, then
-registers the required F4SE lifecycle listener, and only then writes patches.
-The lifecycle coordinator dispatches game-data transitions to the presentation
-and rain subsystems so both can release engine-owned state before teardown.
-
-Forced presentation is divided into explicit session state, input policy,
-screen-geometry ownership, and terminal render-target handoff modules. Rain
-weather policy is separate from the temporary `HUDRainRenderer` lease. Both
-geometry modules restore the exact displaced engine object when they still own
-the relevant slot and relinquish ownership without overwriting a replacement.
-
-Settings are parsed into a complete temporary snapshot and atomically published
-only after the entire INI has been read successfully. A missing, truncated, or
-unparseable file therefore leaves the previous live settings intact.
-
-## Building
+The optional rain overlay loads an independent instance of the native wet-armor
+geometry and temporarily leases `HUDRainRenderer`. It follows vanilla weather,
+interior, submersion, and camera rules, yields to genuine power armor, and is
+hidden during loading screens.
 
 Building requires xmake 3.0.0 or newer and a C++23-capable Visual Studio 2022
-toolchain.
-
-CommonLibF4 is pinned in the `extern/commonlibf4` submodule. Clone the
-repository recursively, or initialize the dependency in an existing checkout:
+toolchain. Clone the repository recursively, then run:
 
 ```powershell
 git submodule update --init --recursive
-```
-
-```powershell
 xmake f -m releasedbg
 xmake
 xmake install -o dist
 ```
 
-The packaged DLL, PDB, and INI are written beneath `dist/F4SE/Plugins`.
-Keep the explicit `-o dist` argument: it prevents CommonLibF4's optional
-`XSE_FO4_MODS_PATH` or `XSE_FO4_GAME_PATH` environment variables from sending
-the package to a mod-manager or game directory instead.
+The DLL, PDB, and INI are packaged under `dist/F4SE/Plugins`. Keep the explicit
+`-o dist` argument so environment variables cannot redirect the package into a
+game or mod-manager directory. Dependency resolutions are pinned in
+`xmake-requires.lock`.
 
-Dependency resolutions are pinned in `xmake-requires.lock`. Re-run
-`xmake f -m releasedbg` intentionally when updating the pinned CommonLib
-submodule or its xmake package requirements.
+## Credits
+
+- Bethesda Game Studios for Fallout 4.
+- Ian Patterson, Stephen Abel, and Brendan Borthwick for F4SE.
+- Ryan-rsm-McKenzie and contributors for CommonLibF4 and Address Library.
+- Brodie Thiesfield (brofield) for SimpleIni.
+- Gabi Melman (gabime) and contributors for spdlog.
+- Ruki Wang (waruqi) and contributors for xmake.
+- The Ghidra team, Doodlez for Bethesda Ghidra Scripts, and Benjamin Ethington
+  (bethington) for Ghidra-MCP.
+- shad0wshayd3 for BakaPowerArmorHUD and other Fallout 4 research projects.
