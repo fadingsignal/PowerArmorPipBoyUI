@@ -27,15 +27,8 @@ namespace PowerArmorPipBoyUI::Runtime
 			CallSite{ 900802, 0x1F, "UpdateCursorConstraint"sv },
 			CallSite{ 643948, 0x3BD, "PipboyMenu screen-space hit testing"sv },
 
-			// The sites that decide what the menu is actually drawn on. Without these the
-			// Interface3D renderer stays world-attached to a wrist that never rises and the
-			// screen shader keeps its wrist constants, which is why the menu came up blank.
-			//
-			// These IDs were read out of version-1-10-163-0.bin rather than taken from
-			// CommonLibF4's IDs.h, whose names do not line up here: its
-			// RefreshPipboyRenderSurface{81339} is 0xC20A20 (the non-power-armor helper),
-			// and its OnPipboyOpened{1299608} is 0xC1F590. The render-surface switch is
-			// 0xC21240 and the opened handler is 0xC20B00.
+			// These sites keep renderer attachment, shader state, the item-preview camera,
+			// and cursor constraints aligned with the screen-space presentation.
 			CallSite{ 157921, 0x19, "render-surface setup (screen-attached quad)"sv },
 			CallSite{ 1477369, 0x154, "Pip-Boy opened (item preview camera)"sv },
 			CallSite{ 1477369, 0x24C, "Pip-Boy opened (screen shader + TAA mode)"sv },
@@ -127,8 +120,6 @@ namespace PowerArmorPipBoyUI::Runtime
 	{
 		HookAddresses addresses{};
 
-		// The OG ID is confirmed by the 1.10.163 Address Library and the BGS
-		// byte-signature corpus. The post-NG equivalent is ID 2219437.
 		addresses.actorInPowerArmor = REL::ID(1176757).address();
 
 		addresses.presentation.reserve(kPresentationSites.size());

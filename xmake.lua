@@ -3,10 +3,9 @@ set_xmakever("3.0.0")
 -- CommonLibF4 is pinned as a repository submodule for reproducible builds.
 includes("extern/commonlibf4")
 
--- enable typed INI parsing support from the pinned CommonLib dependency
+-- Enable typed INI parsing support from the pinned CommonLib dependency.
 set_config("commonlib_ini", true)
 
--- set project constants
 set_project("PowerArmorPipBoyUI")
 	set_version("0.3.7")
 set_license("GPL-3.0")
@@ -14,11 +13,9 @@ set_languages("c++23")
 set_warnings("allextra")
 set_policy("package.requires_lock", true)
 
--- add common rules
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
--- define targets
 target("PowerArmorPipBoyUI")
     add_rules("commonlibf4.plugin", {
         name = "PowerArmorPipBoyUI",
@@ -27,7 +24,6 @@ target("PowerArmorPipBoyUI")
         plugin_template = path.join(os.projectdir(), "res/commonlibf4-plugin.cpp.in"),
     })
 
-    -- add src files
     add_files("src/**.cpp")
     add_headerfiles("src/**.h")
     add_includedirs("src")
