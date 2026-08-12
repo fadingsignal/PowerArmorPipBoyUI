@@ -10,7 +10,8 @@ F4SE_PLUGIN_VERSION = []() noexcept {
     v.IsLayoutDependent(true);
     v.HasNoStructUse(false);
     v.CompatibleVersions({
-        F4SE::RUNTIME_1_10_163
+		F4SE::RUNTIME_1_10_163,
+		F4SE::RUNTIME_1_11_221
     });
     return v;
 }();

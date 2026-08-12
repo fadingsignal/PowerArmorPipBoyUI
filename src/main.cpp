@@ -12,13 +12,14 @@ F4SE_PLUGIN_LOAD(const F4SE::LoadInterface* a_f4se)
 		.trampolineSize = 512,
 	});
 
-	if (a_f4se->RuntimeVersion() != F4SE::RUNTIME_1_10_163) {
-		REX::ERROR("Unsupported Fallout 4 runtime {}", a_f4se->RuntimeVersion().string());
+	const auto runtime = a_f4se->RuntimeVersion();
+	if (!PowerArmorPipBoyUI::Runtime::IsSupported(runtime)) {
+		REX::ERROR("Unsupported Fallout 4 runtime {}", runtime.string());
 		return false;
 	}
 
 	PowerArmorPipBoyUI::Settings::Load();
-	const auto hookAddresses = PowerArmorPipBoyUI::Runtime::ResolveHookAddresses();
+	const auto hookAddresses = PowerArmorPipBoyUI::Runtime::ResolveHookAddresses(runtime);
 	if (!hookAddresses) {
 		return false;
 	}

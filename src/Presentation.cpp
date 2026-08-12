@@ -12,19 +12,6 @@ namespace PowerArmorPipBoyUI::Presentation
 {
 	namespace
 	{
-		using SetPipboyActive_t = bool (*)(
-			RE::BSTValueEventSource<RE::IsPipboyActiveEvent>*,
-			const bool*);
-
-		bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
-		{
-			// BSTValueEventSource's engine setter locks the value and broadcasts an
-			// IsPipboyActiveEvent when it changes. This is the same function called by
-			// PipboyManager::OnPipboyOpened/Closed in Fallout 4 1.10.163.
-			static REL::Relocation<SetPipboyActive_t> setActive{ REL::ID(318434) };
-			return setActive(std::addressof(a_manager->pipboyActive), std::addressof(a_active));
-		}
-
 		void ResetForcedPresentation(const std::string_view a_reason)
 		{
 			TerminalHandoff::Reset();
@@ -43,8 +30,11 @@ namespace PowerArmorPipBoyUI::Presentation
 			Settings::Load();
 
 			if (!a_manager->QPipboyActive()) {
-				SetPipboyActive(a_manager, true);
-				REX::WARN("Repaired missing Pip-Boy active state before close");
+				if (Hooks::SetPipboyActive(a_manager, true)) {
+					REX::WARN("Repaired missing Pip-Boy active state before close");
+				} else {
+					REX::WARN("Pip-Boy active state was missing and no verified repair helper is available");
+				}
 			}
 
 			const bool hadPendingItemAnimation = a_manager->itemAnimOnClose != nullptr;
@@ -122,12 +112,11 @@ namespace PowerArmorPipBoyUI::Presentation
 		a_manager->PlayPipboyLoadHolotapeAnim(a_holotape, a_noAnim || forceNoAnimation);
 	}
 
-	void ClosedownPipboyAndReset(RE::PipboyManager* a_manager)
+	void OnPipboyClosedAndReset(RE::PipboyManager* a_manager)
 	{
-		// Keep the forced state latched through ClosedownPipboy itself: its audio and
-		// presentation checks still need to see the PA branch.
-		Hooks::ClosedownPipboy(a_manager);
-		ResetForcedPresentation("engine closedown"sv);
+		// Keep forced state latched through the complete engine close operation.
+		Hooks::OnPipboyClosed(a_manager);
+		ResetForcedPresentation("engine OnPipboyClosed"sv);
 	}
 
 	void HandleForcedPipboyClose(
@@ -230,8 +219,11 @@ namespace PowerArmorPipBoyUI::Presentation
 		ScreenGeometry::DeferFirstReveal();
 
 		if (!a_manager->QPipboyActive()) {
-			SetPipboyActive(a_manager, true);
-			REX::WARN("Generic open omitted Pip-Boy active state; repaired it");
+			if (Hooks::SetPipboyActive(a_manager, true)) {
+				REX::WARN("Generic open omitted Pip-Boy active state; repaired it");
+			} else {
+				REX::WARN("Generic open omitted Pip-Boy active state; no verified repair helper is available on this runtime");
+			}
 		}
 		DiagnosticLog("Forced Pip-Boy open completed: active={}", a_manager->QPipboyActive());
 	}

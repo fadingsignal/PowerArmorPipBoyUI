@@ -9,7 +9,11 @@ namespace PowerArmorPipBoyUI::Hooks
 	namespace
 	{
 		using ActorInPowerArmor_t = bool (*)(const RE::Actor&);
-		using ClosedownPipboy_t = void (*)(RE::PipboyManager*);
+		using OnPipboyClosed_t = void (*)(RE::PipboyManager*);
+		using SetPipboyActiveOG_t = bool (*)(
+			RE::BSTValueEventSource<RE::IsPipboyActiveEvent>*,
+			const bool*);
+		using SetPipboyActiveAE_t = void (*)(RE::PipboyManager*, bool);
 		using PipboyMenuShouldHandleEvent_t = bool (*)(
 			RE::BSInputEventUser*,
 			const RE::InputEvent*);
@@ -25,11 +29,12 @@ namespace PowerArmorPipBoyUI::Hooks
 		using GetSubmergeLevel_t = float (*)(
 			const RE::TESObjectREFR*,
 			const RE::NiPoint3*,
-			RE::TESObjectCELL*,
-			bool);
+			RE::TESObjectCELL*);
 
 		ActorInPowerArmor_t g_actorInPowerArmor = nullptr;
-		ClosedownPipboy_t g_closedownPipboy = nullptr;
+		OnPipboyClosed_t g_onPipboyClosed = nullptr;
+		SetPipboyActiveOG_t g_setPipboyActiveOG = nullptr;
+		SetPipboyActiveAE_t g_setPipboyActiveAE = nullptr;
 		PipboyMenuShouldHandleEvent_t g_pipboyMenuShouldHandleEvent = nullptr;
 		PipboyMenuOnButtonEvent_t g_pipboyMenuOnButtonEvent = nullptr;
 		FirstPersonStateUpdate_t g_firstPersonStateUpdate = nullptr;
@@ -44,13 +49,27 @@ namespace PowerArmorPipBoyUI::Hooks
 	{
 		g_actorInPowerArmor = reinterpret_cast<ActorInPowerArmor_t>(
 			a_addresses.actorInPowerArmor);
-		g_getPowerArmorHUDRainModifier =
-			reinterpret_cast<GetPowerArmorHUDRainModifier_t>(
-				a_addresses.powerArmorHUDRainModifierGetter);
-		g_referenceIsInterior = reinterpret_cast<ReferenceIsInterior_t>(
-			a_addresses.referenceIsInterior);
-		g_getSubmergeLevel = reinterpret_cast<GetSubmergeLevel_t>(
-			a_addresses.getSubmergeLevel);
+		if (a_addresses.setPipboyActive) {
+			switch (a_addresses.setPipboyActive->abi) {
+			case Runtime::HookAddresses::PipboyActiveSetter::ABI::kValueEventSource:
+				g_setPipboyActiveOG = reinterpret_cast<SetPipboyActiveOG_t>(
+					a_addresses.setPipboyActive->address);
+				break;
+			case Runtime::HookAddresses::PipboyActiveSetter::ABI::kPipboyManager:
+				g_setPipboyActiveAE = reinterpret_cast<SetPipboyActiveAE_t>(
+					a_addresses.setPipboyActive->address);
+				break;
+			}
+		}
+		if (a_addresses.rain) {
+			g_getPowerArmorHUDRainModifier =
+				reinterpret_cast<GetPowerArmorHUDRainModifier_t>(
+					a_addresses.rain->powerArmorHUDRainModifierGetter);
+			g_referenceIsInterior = reinterpret_cast<ReferenceIsInterior_t>(
+				a_addresses.rain->referenceIsInterior);
+			g_getSubmergeLevel = reinterpret_cast<GetSubmergeLevel_t>(
+				a_addresses.rain->getSubmergeLevel);
+		}
 
 		auto& trampoline = REL::GetTrampoline();
 		for (const auto address : a_addresses.presentation) {
@@ -84,10 +103,15 @@ namespace PowerArmorPipBoyUI::Hooks
 				Presentation::PlayPipboyLoadHolotapeForForcedPresentation);
 		}
 
-		g_closedownPipboy = reinterpret_cast<ClosedownPipboy_t>(
-			trampoline.write_call<5>(
-				a_addresses.closedown.front(),
-				Presentation::ClosedownPipboyAndReset));
+		for (const auto address : a_addresses.pipboyClosedCalls) {
+			const auto original = reinterpret_cast<OnPipboyClosed_t>(
+				trampoline.write_call<5>(address, Presentation::OnPipboyClosedAndReset));
+			if (!g_onPipboyClosed) {
+				g_onPipboyClosed = original;
+			} else if (g_onPipboyClosed != original) {
+				REX::ERROR("OnPipboyClosed callers did not share the validated target");
+			}
+		}
 
 		REL::Relocation<std::uintptr_t> pipboyMenuInputVtable{
 			a_addresses.pipboyMenuInputVtable
@@ -112,23 +136,27 @@ namespace PowerArmorPipBoyUI::Hooks
 		// CommonLib's primary PipboyMenu vtable ID is Address Library-backed for
 		// every supported runtime. AdvanceMovie provides a genuine menu/render frame
 		// boundary without adding another executable call-site address.
-		REL::Relocation<std::uintptr_t> pipboyMenuVtable{ RE::PipboyMenu::VTABLE[0] };
+		REL::Relocation<std::uintptr_t> pipboyMenuVtable{ a_addresses.pipboyMenuVtable };
 		g_pipboyMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
 			pipboyMenuVtable.write_vfunc(
-				0x04,
+				Runtime::kPipboyMenuAdvanceMovieIndex,
 				Presentation::AdvancePipboyMenuForTerminalReturn));
 
-		REL::Relocation<std::uintptr_t> hudMenuVtable{ a_addresses.hudMenuVtable };
-		g_hudMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
-			hudMenuVtable.write_vfunc(
-				Runtime::kHUDMenuAdvanceMovieIndex,
-				RainOverlay::AdvanceHUDMenu));
+		if (a_addresses.rain) {
+			REL::Relocation<std::uintptr_t> hudMenuVtable{ a_addresses.rain->hudMenuVtable };
+			g_hudMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
+				hudMenuVtable.write_vfunc(
+					Runtime::kHUDMenuAdvanceMovieIndex,
+					RainOverlay::AdvanceHUDMenu));
+		}
 
 		REX::INFO(
-			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, authoritative closedown cleanup, the nested-menu-aware forced-close input fallback, the first-person camera freeze, the PipboyMenu frame handoff, and the HUD rain frame handoff",
+			"Installed {} presentation hooks, 2 no-animation open overrides, {} no-animation holotape overrides, {} close overrides, {} authoritative close cleanup hooks, the forced-close input fallback, the first-person camera freeze, the PipboyMenu frame handoff, and rain={}",
 			a_addresses.presentation.size(),
 			a_addresses.pipboyLoadHolotapeCalls.size(),
-			a_addresses.pipboyCloseCalls.size());
+			a_addresses.pipboyCloseCalls.size(),
+			a_addresses.pipboyClosedCalls.size(),
+			a_addresses.rain.has_value());
 	}
 
 	bool ActorInPowerArmor(const RE::Actor& a_actor)
@@ -136,9 +164,24 @@ namespace PowerArmorPipBoyUI::Hooks
 		return g_actorInPowerArmor(a_actor);
 	}
 
-	void ClosedownPipboy(RE::PipboyManager* a_manager)
+	void OnPipboyClosed(RE::PipboyManager* a_manager)
 	{
-		g_closedownPipboy(a_manager);
+		g_onPipboyClosed(a_manager);
+	}
+
+	bool SetPipboyActive(RE::PipboyManager* a_manager, const bool a_active)
+	{
+		if (g_setPipboyActiveOG) {
+			g_setPipboyActiveOG(
+				std::addressof(a_manager->pipboyActive),
+				std::addressof(a_active));
+			return true;
+		}
+		if (g_setPipboyActiveAE) {
+			g_setPipboyActiveAE(a_manager, a_active);
+			return true;
+		}
+		return false;
 	}
 
 	bool PipboyMenuShouldHandleEvent(
@@ -193,7 +236,6 @@ namespace PowerArmorPipBoyUI::Hooks
 		return g_getSubmergeLevel(
 			std::addressof(a_reference),
 			std::addressof(a_reference.data.location),
-			a_reference.parentCell,
-			false);
+			a_reference.parentCell);
 	}
 }
