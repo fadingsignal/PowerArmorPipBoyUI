@@ -77,7 +77,7 @@ namespace PowerArmorPipBoyUI::Runtime
 
 		constexpr std::array kPipboyLoadHolotapeSitesAE{
 			CallSite{ 0, 0, 2224162, 0x147, "animated holotape load caller 1"sv },
-			CallSite{ 0, 0, 2224169, 0x72, "animated holotape load caller 2"sv },
+			CallSite{ 0, 0, 2224169, 0x9E, "animated holotape load caller 2"sv },
 			CallSite{ 0, 0, 2234886, 0x1B3, "animated holotape load caller 3"sv },
 		};
 
