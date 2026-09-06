@@ -144,9 +144,10 @@ namespace PowerArmorPipBoyUI::RainOverlay
 		ReloadSettingOnWeatherEdge();
 
 		const auto* player = RE::PlayerCharacter::GetSingleton();
+		const bool playerInPowerArmor = player && Hooks::ActorInPowerArmor(*player);
 		if (!g_gameDataReady || LoadingScreenOpen() ||
 			!Settings::RainOverlayOutsidePowerArmor() || !player ||
-			Hooks::ActorInPowerArmor(*player)) {
+			playerInPowerArmor) {
 			if (Rain::RendererLease::OwnsRenderer()) {
 				Rain::RendererLease::Relinquish("rain presentation not eligible"sv);
 			}

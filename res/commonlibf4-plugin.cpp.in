@@ -1,4 +1,5 @@
 #include <F4SE/F4SE.h>
+#include "Runtime/Profiles.h"
 
 F4SE_PLUGIN_VERSION = []() noexcept {
     F4SE::PluginVersionData v{};
@@ -9,8 +10,11 @@ F4SE_PLUGIN_VERSION = []() noexcept {
     v.UsesSigScanning(false);
     v.IsLayoutDependent(true);
     v.HasNoStructUse(false);
-    v.CompatibleVersions({
-        F4SE::RUNTIME_1_10_163
-    });
+    // Keep F4SE's zero-terminated version list in sync with the runtime gate.
+    constexpr auto& profiles = PowerArmorPipBoyUI::Runtime::Profiles::kProfiles;
+    static_assert(profiles.size() < std::size(v.compatibleVersions));
+    for (std::size_t i = 0; i < profiles.size(); ++i) {
+        v.compatibleVersions[i] = REL::Version{ profiles[i]->version }.pack();
+    }
     return v;
 }();

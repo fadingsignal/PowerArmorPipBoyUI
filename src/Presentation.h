@@ -16,7 +16,7 @@ namespace PowerArmorPipBoyUI::Presentation
 		RE::PipboyManager* a_manager,
 		RE::BGSNote* a_holotape,
 		bool a_noAnim);
-	void ClosedownPipboyAndReset(RE::PipboyManager* a_manager);
+	void OnPipboyClosedAndReset(RE::PipboyManager* a_manager);
 
 	bool ShouldHandleForcedPipboyClose(
 		RE::BSInputEventUser* a_inputUser,

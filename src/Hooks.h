@@ -10,7 +10,8 @@ namespace PowerArmorPipBoyUI::Hooks
 	void Install(const Runtime::HookAddresses& a_addresses);
 
 	bool ActorInPowerArmor(const RE::Actor& a_actor);
-	void ClosedownPipboy(RE::PipboyManager* a_manager);
+	void OnPipboyClosed(RE::PipboyManager* a_manager);
+	[[nodiscard]] bool SetPipboyActive(RE::PipboyManager* a_manager, bool a_active);
 	bool PipboyMenuShouldHandleEvent(
 		RE::BSInputEventUser* a_inputUser,
 		const RE::InputEvent* a_event);
