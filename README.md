@@ -54,7 +54,7 @@ bPowerArmorAudio=1
 bKeepPipboyLightOn=1
 bRainOverlayOutsidePowerArmor=1
 bUsePipboyEffectColor=1
-bEnableDebugLogging=1
+bEnableDebugLogging=0
 ```
 
 - `bForcePowerArmorPipboy` enables the fullscreen Pip-Boy outside power armor.
