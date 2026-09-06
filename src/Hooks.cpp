@@ -114,39 +114,40 @@ namespace PowerArmorPipBoyUI::Hooks
 		}
 
 		REL::Relocation<std::uintptr_t> pipboyMenuInputVtable{
-			a_addresses.pipboyMenuInputVtable
+			a_addresses.inputShouldHandle.address
 		};
 		g_pipboyMenuShouldHandleEvent = reinterpret_cast<PipboyMenuShouldHandleEvent_t>(
 			pipboyMenuInputVtable.write_vfunc(
-				Runtime::kShouldHandleEventIndex,
+				a_addresses.inputShouldHandle.slot,
 				Presentation::ShouldHandleForcedPipboyClose));
+		REL::Relocation<std::uintptr_t> pipboyMenuButtonVtable{ a_addresses.inputButton.address };
 		g_pipboyMenuOnButtonEvent = reinterpret_cast<PipboyMenuOnButtonEvent_t>(
-			pipboyMenuInputVtable.write_vfunc(
-				Runtime::kOnButtonEventIndex,
+			pipboyMenuButtonVtable.write_vfunc(
+				a_addresses.inputButton.slot,
 				Presentation::HandleForcedPipboyClose));
 
 		REL::Relocation<std::uintptr_t> firstPersonStateVtable{
-			a_addresses.firstPersonStateVtable
+			a_addresses.firstPersonUpdate.address
 		};
 		g_firstPersonStateUpdate = reinterpret_cast<FirstPersonStateUpdate_t>(
 			firstPersonStateVtable.write_vfunc(
-				Runtime::kFirstPersonStateUpdateIndex,
+				a_addresses.firstPersonUpdate.slot,
 				Presentation::UpdateFirstPersonCameraForForcedPresentation));
 
 		// CommonLib's primary PipboyMenu vtable ID is Address Library-backed for
 		// every supported runtime. AdvanceMovie provides a genuine menu/render frame
 		// boundary without adding another executable call-site address.
-		REL::Relocation<std::uintptr_t> pipboyMenuVtable{ a_addresses.pipboyMenuVtable };
+		REL::Relocation<std::uintptr_t> pipboyMenuVtable{ a_addresses.pipboyFrame.address };
 		g_pipboyMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
 			pipboyMenuVtable.write_vfunc(
-				Runtime::kPipboyMenuAdvanceMovieIndex,
+				a_addresses.pipboyFrame.slot,
 				Presentation::AdvancePipboyMenuForTerminalReturn));
 
 		if (a_addresses.rain) {
-			REL::Relocation<std::uintptr_t> hudMenuVtable{ a_addresses.rain->hudMenuVtable };
+			REL::Relocation<std::uintptr_t> hudMenuVtable{ a_addresses.rain->hudFrame.address };
 			g_hudMenuAdvanceMovie = reinterpret_cast<PipboyMenuAdvanceMovie_t>(
 				hudMenuVtable.write_vfunc(
-					Runtime::kHUDMenuAdvanceMovieIndex,
+					a_addresses.rain->hudFrame.slot,
 					RainOverlay::AdvanceHUDMenu));
 		}
 

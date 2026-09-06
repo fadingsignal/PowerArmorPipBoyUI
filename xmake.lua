@@ -30,3 +30,12 @@ target("PowerArmorPipBoyUI")
     set_pcxxheader("src/pch.h")
     add_installfiles("res/PowerArmorPipBoyUI.ini", { prefixdir = "F4SE/Plugins" })
     add_extrafiles(".clang-format")
+
+-- Read-only binary audit; shares the DLL's exact runtime profiles and checks.
+-- Build explicitly with: xmake build runtime-audit
+target("runtime-audit")
+    set_kind("binary")
+    set_default(false)
+    add_files("tools/runtime-audit.cpp")
+    add_includedirs("src")
+    add_syslinks("version")

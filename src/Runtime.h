@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Runtime/Profiles.h"
+
 namespace PowerArmorPipBoyUI::Runtime
 {
 	struct HookAddresses
@@ -14,16 +16,18 @@ namespace PowerArmorPipBoyUI::Runtime
 		std::uintptr_t companionUseItemCall;
 		std::vector<std::uintptr_t> pipboyCloseCalls;
 		std::vector<std::uintptr_t> pipboyLoadHolotapeCalls;
-		std::uintptr_t pipboyMenuVtable;
-		std::uintptr_t pipboyMenuInputVtable;
-		std::uintptr_t firstPersonStateVtable;
+		struct VtableHook
+		{
+			std::uintptr_t address;
+			std::size_t slot;
+		};
+		VtableHook pipboyFrame;
+		VtableHook inputShouldHandle;
+		VtableHook inputButton;
+		VtableHook firstPersonUpdate;
 		struct PipboyActiveSetter
 		{
-			enum class ABI
-			{
-				kValueEventSource,
-				kPipboyManager
-			};
+			using ABI = Profiles::ActiveSetterABI;
 
 			std::uintptr_t address;
 			ABI abi;
@@ -32,19 +36,13 @@ namespace PowerArmorPipBoyUI::Runtime
 
 		struct Rain
 		{
-			std::uintptr_t hudMenuVtable;
+			VtableHook hudFrame;
 			std::uintptr_t powerArmorHUDRainModifierGetter;
 			std::uintptr_t referenceIsInterior;
 			std::uintptr_t getSubmergeLevel;
 		};
 		std::optional<Rain> rain;
 	};
-
-	inline constexpr std::size_t kShouldHandleEventIndex = 1;
-	inline constexpr std::size_t kOnButtonEventIndex = 8;
-	inline constexpr std::size_t kFirstPersonStateUpdateIndex = 0x0B;
-	inline constexpr std::size_t kPipboyMenuAdvanceMovieIndex = 0x04;
-	inline constexpr std::size_t kHUDMenuAdvanceMovieIndex = 0x04;
 
 	[[nodiscard]] bool IsSupported(const REL::Version& a_runtime);
 	[[nodiscard]] std::optional<HookAddresses> ResolveHookAddresses(
